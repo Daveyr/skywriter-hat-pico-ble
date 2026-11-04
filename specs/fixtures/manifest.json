@@ -1,10 +1,12 @@
 {
   "schema": "skywriter-fixtures/v1",
   "date": "2026-11-04",
-  "notes": [
+    "notes": [
     "Expectations follow specs/hid_mapping.md §6. Python expectations assume the decoder receives the message payload (frame[4:]) — see deviation D1 in specs/README.md.",
     "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
-    "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them."
+    "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
+    "2026-11-04 revision: the AirWheel counter wrap is a signed 8-bit difference (wraps 255->0, 32 counts per revolution) — see specs/hid_mapping.md §2. F14 was re-authored from counter 0x1E to 0xFE; its '1e' filename label is stale (filenames are stable by rule) but the data value is 0xFE.",
+    "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout."
   ],
   "frames": {
     "F01_position_only": {
@@ -14,7 +16,7 @@
     },
     "F02_flick_west_east": {
       "file": "F02_flick_west_east.hex",
-      "source": "vendor (Interface.pdf Table A-3, frame seq 0x4A, gesture word 02 10 02 00)",
+      "source": "vendor-derived (Interface.pdf Table A-3, frame seq 0x4A, gesture word 02 10 02 00 — vendor field values repacked into our 26-byte mask-0x001F frame)",
       "desc": "Flick West->East, gesture class 1 (flick). Bit 17 of GestureInfo is set (reserved) and must be ignored."
     },
     "F03_flick_east_west": {
@@ -39,17 +41,17 @@
     },
     "F07_touch_center": {
       "file": "F07_touch_center.hex",
-      "source": "vendor (Interface.pdf Table A-3 'Touch Center Electrode' frame, touch word 10 00 09 00)",
+      "source": "vendor-derived (Interface.pdf Table A-3 'Touch Center Electrode' frame, touch word 10 00 09 00 — repacked)",
       "desc": "Touch Center (bit 4), touch counter 9 (approach 45 ms)."
     },
     "F08_touch_center_hold": {
       "file": "F08_touch_center_hold.hex",
-      "source": "vendor (Interface.pdf Table A-3 'Touch Counter Reset' frame, touch word 10 00 00 00)",
+      "source": "vendor-derived (Interface.pdf Table A-3 'Touch Counter Reset' frame, touch word 10 00 00 00 — repacked)",
       "desc": "Touch Center still held, counter reset to 0."
     },
     "F09_tap_center": {
       "file": "F09_tap_center.hex",
-      "source": "vendor (Interface.pdf Table A-3 'Tap on Center electrode' frame, touch word 00 02 00 00)",
+      "source": "vendor-derived (Interface.pdf Table A-3 'Tap on Center electrode' frame, touch word 00 02 00 00 — repacked)",
       "desc": "Tap Center (bit 9)."
     },
     "F10_doubletap_center": {
@@ -75,12 +77,12 @@
     "F14_airwheel_step1e": {
       "file": "F14_airwheel_step1e.hex",
       "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 1e (30 dec): setup for wrap test."
+      "desc": "AirWheel counter 0xFE (254 dec): setup for wrap test. The '1e' filename label is stale from the superseded modulo-32 draft (value is 0xFE; filenames are stable by rule)."
     },
     "F15_airwheel_step02": {
       "file": "F15_airwheel_step02.hex",
       "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 02 after 30: +4 steps (+45 deg) across the 31->0 wrap."
+      "desc": "AirWheel counter 02 after 0xFE: +4 steps (+45 deg) across the 255->0 wrap."
     },
     "F16_status_ack_a2": {
       "file": "F16_status_ack_a2.hex",
@@ -110,8 +112,8 @@
       "expect": {
         "canonical": ["position(x=500, y=1000, z=200)"],
         "arduino": "onXYZ(500, 1000, 200)",
-        "python": "move(0.0076, 0.0153, 0.0031)  # raw/65536 rounded to 4 dp",
-        "hid": "mouse report delta ~= (+1.95, +3.91) px at GAIN=1/256"
+        "python": "move(0.0076, 0.0153, 0.0031)  # raw/65536 rounded to 4 dp; caveat: the legacy library emits every position, including the first — the new ports implement the §3 baseline and emit nothing here",
+        "hid": "no mouse movement: the first valid position only sets the pointer baseline (hid_mapping.md §3 rule 4); the next frame would emit a delta [AC-MAP-01]"
       }
     },
     {
@@ -220,9 +222,9 @@
       "frames": ["F14_airwheel_step1e", "F15_airwheel_step02"],
       "expect": {
         "canonical": ["airwheel(+45 deg)"],
-        "arduino": "onAirwheel(45)  # today: delta -315 deg is silently dropped (D3)",
-        "python": "airwheel(45.0)  # today: delta -315 deg is silently dropped (D3)",
-        "hid": "wheel up 4 notches. 31->0 wrap must count as +1 step, not -31 [AC-MAP-04]"
+        "arduino": "onAirwheel(45)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
+        "python": "airwheel(45.0)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
+        "hid": "wheel up 4 notches (4 steps x 11.25 deg). The 255->0 wrap must count as +4 steps, not -252 [AC-MAP-04]"
       }
     },
     {

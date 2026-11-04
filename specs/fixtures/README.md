@@ -43,7 +43,8 @@ so every field is present at its fixed offset (see `specs/README.md`):
 06-09  GestureInfo (LE u32): bits 0-7 code, 12-15 class, 16 edge flick, 31 in-progress
 10-13  TouchInfo   (LE u32): bits 0-4 touch S/W/N/E/C, 5-9 tap, 10-14 doubletap,
                              16-23 touch counter (×5 ms)
-14-15  AirWheelInfo: byte 0 = rotation counter (32 steps/rev), byte 1 reserved
+14-15  AirWheelInfo: byte 0 = rotation counter (free-running 8-bit, 0-255, wraps
+            255->0; 32 counts/rev), byte 1 reserved
 16-21  xyzPosition: three LE u16 (x, y, z), 0-65535
 ```
 
@@ -52,13 +53,18 @@ Header: `size`(=total bytes incl. header) `flags`(0x08, per vendor examples)
 
 ## Provenance
 
-Each fixture's `source` field in the manifest is either:
+Each fixture's `source` field in the manifest is one of:
 
-- **vendor** — verbatim from `datasheets/Interface.pdf` (cited table); reserved
-  bits are kept as the vendor wrote them, which doubles as a "reserved bits are
-  ignored" test.
+- **vendor** — verbatim from `datasheets/Interface.pdf` (cited table), bytes
+  unchanged (currently F16 only); reserved bits are kept as the vendor wrote
+  them, which doubles as a "reserved bits are ignored" test.
+- **vendor-derived** — vendor field values cited from an Interface.pdf table,
+  repacked into our standard 26-byte frame layout. Not byte-for-byte vendor.
+- **vendor pattern** — the shape of a vendor trace row reconstructed with
+  clean values.
 - **synthetic** — constructed to the cited table's layout with clean values.
-  Pending confirmation against real captures in the outer hardware loop.
+  All non-`vendor` fixtures are pending confirmation against real captures
+  in the outer hardware loop.
 
 ## Time-dependent expectations
 

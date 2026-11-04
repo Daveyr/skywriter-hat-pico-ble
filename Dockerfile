@@ -12,6 +12,11 @@
 #   by default), with no sudo. The agent cannot modify the image's system files.
 # - The Pico toolchain (arduino-cli + rp2040 core, several hundred MB) is installed on
 #   first use into a volume instead of the image, so the image stays small.
+#   ARDUINO_DIRECTORIES_USER points arduino-cli's *user* directory (whose
+#   `libraries/` subfolder receives `lib install`) inside the volume, so
+#   installed libraries survive --rm reruns instead of vanishing with the
+#   container's $HOME. (arduino-cli appends `/libraries` itself — do not
+#   point it at the libraries folder directly.)
 #
 # Hardened run (dangerously-skip-permissions: the container is the safety boundary):
 #   docker run -it --rm \
@@ -50,7 +55,8 @@ ENV LANG=C.UTF-8 \
     GIT_PAGER=cat \
     GIT_TERMINAL_PROMPT=0 \
     PYTHONDONTWRITEBYTECODE=1 \
-    ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS=https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+    ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS=https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json \
+    ARDUINO_DIRECTORIES_USER=/home/dev/.arduino15
 
 # The arduino-pico core ships glibc-linked binaries (arm-none-eabi-gcc, picotool). gcompat
 # and libstdc++ let them run on musl; eudev-libs supplies the libudev.so.1 that picotool
@@ -82,10 +88,10 @@ WORKDIR /workspace
 
 RUN install -d -m 0700 /home/dev/.ssh && \
     install -d /home/dev/.config/opencode /home/dev/.local/share/opencode \
-               /home/dev/.arduino15 /home/dev/Arduino/libraries && \
-    echo '{"$schema":"https://opencode.ai/config.json","permissions":[{"action":"*","resource":"*","effect":"allow"}]}' \
+               /home/dev/.arduino15 /home/dev/.arduino15/libraries && \
+    echo '{"$schema":"https://opencode.ai/config.json","model":"opencode-go/glm-5.3-flash","permissions":[{"action":"*","resource":"*","effect":"allow"}]}' \
         > /home/dev/.config/opencode/opencode.json && \
-    ln -s /workspace/arduino/Skywriter /home/dev/Arduino/libraries/Skywriter
+    ln -s /workspace/arduino/Skywriter /home/dev/.arduino15/libraries/Skywriter
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["bash"]

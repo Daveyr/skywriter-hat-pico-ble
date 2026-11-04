@@ -72,7 +72,8 @@ Key field facts (cited in `hid_mapping.md` where used):
   recognition in progress.
 - `TouchInfo` bits 0–14 = touch/tap/doubletap electrodes, bits 16–23 = touch
   counter (× 5 ms approach time).
-- `AirWheelInfo` byte 0 = rotation counter, 32 increments ≈ 1 full rotation.
+- `AirWheelInfo` byte 0 = free-running 8-bit rotation counter (0–255, wraps
+  255→0); 32 increments ≈ 1 full rotation.
 - `xyzPosition` = three 16-bit LE values, range 0–65535 each; origin is the
   lower-left (South-West) corner at the sensor surface.
 
@@ -86,7 +87,7 @@ fixed in the drivers (Phase 2/3) and then removed from this table.
 |---|---|---|---|
 | D1 | Python (`library/skywriter/__init__.py`) | `_do_poll` passes the **full 26-byte frame** (header included) to `_handle_sensor_data` / `_handle_firmware_info`, but those index **payload** offsets starting at 0 — everything is shifted by 4 bytes. Regression introduced when `data.pop(0)` header-stripping was removed (commit `e7e2399`). | `_do_poll` reads 26 B and dispatches `data`; `_handle_sensor_data` reads `d_configmask = data[0] | data[1] << 8` which is actually `size|flags`. |
 | D2 | Arduino (`arduino/Skywriter/skywriter.cpp`) | `setRuntimeParam` loops `i < 16` over 15-byte command arrays: one out-of-bounds byte is written to I2C after the 16-byte message. | `cmdAirWheel[]` et al. have 15 initializers; loop bound is 16. |
-| D3 | Python + Arduino | AirWheel delta ignores the 8-bit counter wrap: `(cur - last) / 32.0` must be a signed modulo-32 difference. Crossing 31→0 produces a large negative delta that is silently dropped (`|delta| < 0.5` guard). | Both `handle_sensor_data` implementations. |
+| D3 | Python + Arduino | AirWheel delta ignores the 8-bit counter wrap: `(cur - last) / 32.0` must be a signed modulo-256 (8-bit) difference, `d = ((cur - last + 128) % 256) - 128`. Crossing 255→0 produces a large negative delta that is silently dropped (`|delta| < 0.5` guard). | Both `handle_sensor_data` implementations. |
 | D4 | Arduino | Touch decode reports only the highest set bit and `return`s from `handle_sensor_data`, skipping AirWheel decode for that frame. Spec requires processing every set bit and continuing to the remaining fields. | `skywriter.cpp` touch loop, `return` at the first match. |
 | D5 | Python | `garbage()` decorator registers `_on_garbage`, but the decoder never dispatches it (gesture code 1 is matched by the `gestures` list and falls through). | `_handle_sensor_data` gesture branch only handles `flick`. |
 | D6 | Python | `_handle_firmware_info` treats any `FwValid` other than `0x00`/`0x0A` as valid. Spec (Interface.pdf §4.3) defines `0xAA` = valid, `0x00` = empty, `0x0A` = invalid. | `__init__.py` `_handle_firmware_info`. |

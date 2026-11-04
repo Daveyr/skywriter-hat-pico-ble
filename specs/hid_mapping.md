@@ -42,9 +42,14 @@ word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
   repeats with a resetting counter). Tap/doubletap bits are one-shot.
 - **Touch counter** (bits 16–23) = approach time × 5 ms; informational only for
   HID purposes.
-- **AirWheel wrap:** the counter is 8-bit, 32 steps ≈ 1 revolution, and wraps
-  31→0 in either direction. Delta = signed modulo-32 difference of consecutive
-  counters: `d = ((cur - last + 16) % 32) - 16` steps, degrees = `d * 11.25`.
+- **AirWheel wrap:** the counter is a free-running 8-bit byte (0–255) and 32
+  increments ≈ 1 revolution (Interface.pdf Table 4-10), so it wraps 255→0
+  while counting clockwise. Delta = **signed 8-bit difference** of consecutive
+  counters: `d = ((cur - last + 128) % 256) - 128` steps, degrees =
+  `d * 11.25`. A crossing of 255→0 is +1 step, not −255. (Side effect of
+  signed 8-bit arithmetic: any per-frame change above 128 steps reads as
+  counter-clockwise — physically implausible within one 5 ms frame, so
+  shortest-path is always correct.)
   (Both current drivers get this wrong — deviation D3 in `specs/README.md`.)
 - **Gesture in-progress frames** (`GestureInfo` bit 31 set, code 0) produce no
   event. Code 1 (garbage) produces a `gesture(1, …)` event which the mapping
@@ -172,7 +177,7 @@ Fixture names refer to `fixtures/manifest.json`.
 | AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work. | F01, F19 (jump), probe |
 | AC-MAP-02 | Touch press → button down on first frame; repeats don't re-trigger; release after `TOUCH_RELEASE_MS` without frames. | F07, F08 (sequence), F18 |
 | AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10 |
-| AC-MAP-04 | Airwheel emits 11.25°-quantized notches, signed correctly, and **survives counter wrap** (31→0 is +1 step, not −31). | F11–F15 (sequences) |
+| AC-MAP-04 | Airwheel emits 11.25°-quantized notches, signed correctly, and **survives counter wrap** (255→0 is +1 step, not −255). | F11–F15 (sequences) |
 | AC-MAP-05 | Gestures map per §6; garbage and in-progress frames emit nothing; edge-flick flag is carried in the canonical event. | F02–F06 |
 | AC-MAP-06 | A frame carrying touch + airwheel + position produces **all** corresponding outputs. | F18 |
 | AC-MAP-07 | Lift-off releases all buttons and resets the pointer baseline and airwheel accumulator. | probe + F07/F08 sequence (release by silence) |
