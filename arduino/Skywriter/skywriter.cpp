@@ -5,58 +5,15 @@ void _SkyWriter::begin(unsigned char pin_xfer, unsigned char pin_reset){
   this->xfer = pin_xfer;
   this->rst  = pin_reset;
   this->addr = SW_ADDR;
-
+  
   Wire.begin();
-
+  
   pinMode(this->xfer, INPUT_PULLUP);
   pinMode(this->rst,  OUTPUT);
   digitalWrite(this->rst, LOW);
-  delay(100);
+  delay(10);
   digitalWrite(this->rst, HIGH);
-  delay(500);
-
-  // Configure the MGC3130 runtime parameters (mirrors the Python setup()).
-  const unsigned char cmdAirWheel[] = {0x00,0x00,0xA2, 0x90,0x00, 0x00,0x00, 0x20,0x00,0x00,0x00, 0x20,0x00,0x00,0x00};
-  const unsigned char cmdGestures[] = {0x00,0x00,0xA2, 0x85,0x00, 0x00,0x00, 0b01111111,0x00,0x00,0x00, 0b01111111,0x00,0x00,0x00};
-  const unsigned char cmdDataOut[]  = {0x00,0x00,0xA2, 0xA0,0x00, 0x00,0x00, 0b00011111,0x00,0x00,0x00, 0b00011111,0x00,0x00,0x00};
-  const unsigned char cmdAutoCal[]  = {0x00,0x00,0xA2, 0x80,0x00, 0x00,0x00, 0x00,0x00,0x00,0x00, 0b00011111,0x00,0x00,0x00};
-
-  setRuntimeParam(cmdAirWheel);
-  setRuntimeParam(cmdGestures);
-  setRuntimeParam(cmdDataOut);
-  setRuntimeParam(cmdAutoCal);
-}
-
-bool _SkyWriter::setRuntimeParam(const unsigned char* command) {
-  Wire.beginTransmission(this->addr);
-  Wire.write((unsigned char)0x10);
-  for (unsigned char i = 0; i < 16; i++) {
-    Wire.write(command[i]);
-  }
-  if (Wire.endTransmission() != 0) {
-    return false;
-  }
-
-  for (unsigned char attempt = 0; attempt < 10; attempt++) {
-    delay(1);
-    pinMode(this->xfer, OUTPUT);
-    digitalWrite(this->xfer, LOW);
-
-    Wire.requestFrom(this->addr, (unsigned char)32);
-    unsigned char data[32];
-    unsigned char n = 0;
-    while (Wire.available() && n < 32) {
-      data[n++] = (unsigned char)Wire.read();
-    }
-
-    digitalWrite(this->xfer, HIGH);
-    pinMode(this->xfer, INPUT_PULLUP);
-
-    if (n >= 5 && data[3] == 0x15 && data[4] == 0xA2) {
-      return true;
-    }
-  }
-  return false;
+  delay(50);
 }
 
 void _SkyWriter::poll(){

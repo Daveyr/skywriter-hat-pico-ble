@@ -81,7 +81,6 @@ class _SkyWriter
     unsigned char xfer, rst, addr;
     unsigned char command_buffer[32];
     void handle_sensor_data(unsigned char* data);
-    bool setRuntimeParam(const unsigned char* command);
 };
 
 namespace { _SkyWriter Skywriter; }
