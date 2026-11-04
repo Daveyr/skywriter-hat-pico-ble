@@ -3,7 +3,11 @@
 ## Project Overview
 Pimoroni Skywriter 3D gesture sensor (MGC3130 / GestIC) driver repository (`v0.0.9`, `library/setup.py`).
 Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ Arduino library (`arduino/Skywriter/`), Pico W build/flash tooling (`pico-arduino/flash.sh`), GestIC firmware updater (`firmware/`), and Debian packaging (`packaging/`).
-Currently on branch `pico-ble`; `specs/` is an empty directory for upcoming Pico BLE work.
+
+## To build
+
+`pico-arduino/` is the folder to contain firmware related to the conversion of the existing Arduino code for Pico and Pico W BLE hardware.
+`pico-python/` is the folder to contain firmware related to the conversion of the existing Python code for Pico and Pico W BLE hardware.
 
 ## Environment
 - Container Python: `Python 3.12.3`; Arduino toolchain: `/home/user/local/bin/arduino-cli`.
@@ -49,6 +53,7 @@ Currently on branch `pico-ble`; `specs/` is an empty directory for upcoming Pico
 - **Debian packaging**: `cd packaging && ./makeall.sh`.
 
 ## Conventions
+- **Summarise changes for non-specialists**: Every change summary (commits, reports, status updates) must be written for a reader who does not know electronics jargon. Always spell out acronyms and initialisms on first use — e.g. I2C (Inter-Integrated Circuit, the two-wire bus to the sensor), BLE (Bluetooth Low Energy), HID (Human Interface Device, the standard for mice/keyboards), UF2 (USB Flashing Format), GPIO (General-Purpose Input/Output pins), USB CDC (Communications Device Class, the USB serial port), BOOTSEL (boot select, the Pico's flashing mode). State what changed and why in plain language before any technical detail.
 - **Search first**: Reuse existing protocol constants (`SW_*`), payload offsets (`SW_PAYLOAD_*`), and event decorators/callbacks in `library/skywriter/__init__.py` and `arduino/Skywriter/skywriter.h` before writing new code.
 - **Pico Arduino sketches**: Each sketch lives in its own folder matching the `.ino` filename. Always use `pico-arduino/flash.sh` (do not run `arduino-cli upload` directly or hard-code `/dev/ttyACM0`), and keep the default CDC USB serial stack enabled so the 1200-baud BOOTSEL reset works.
 - **Directories never to modify**: `datasheets/`, `firmware/fw.py`, sketch `build/` directories (written by `pico-arduino/flash.sh`), and generated `library/debian/` or `library/build/` (`packaging/makedeb.sh` deletes and overwrites them).

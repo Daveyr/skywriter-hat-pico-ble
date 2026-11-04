@@ -20,3 +20,6 @@ pip-log.txt
 pip-delete-this-directory.txt
 .DS_Store
 *_deploy_key
+logs/
+/DONE
+/READY_FOR_HW
