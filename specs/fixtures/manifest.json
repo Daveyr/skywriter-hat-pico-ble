@@ -1,0 +1,259 @@
+{
+  "schema": "skywriter-fixtures/v1",
+  "date": "2026-11-04",
+  "notes": [
+    "Expectations follow specs/hid_mapping.md §6. Python expectations assume the decoder receives the message payload (frame[4:]) — see deviation D1 in specs/README.md.",
+    "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
+    "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them."
+  ],
+  "frames": {
+    "F01_position_only": {
+      "file": "F01_position_only.hex",
+      "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+      "desc": "Valid position x=500, y=1000, z=200; DSPRunning|PositionValid."
+    },
+    "F02_flick_west_east": {
+      "file": "F02_flick_west_east.hex",
+      "source": "vendor (Interface.pdf Table A-3, frame seq 0x4A, gesture word 02 10 02 00)",
+      "desc": "Flick West->East, gesture class 1 (flick). Bit 17 of GestureInfo is set (reserved) and must be ignored."
+    },
+    "F03_flick_east_west": {
+      "file": "F03_flick_east_west.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "Flick East->West, gesture class 1 (flick), clean word 03 10 00 00."
+    },
+    "F04_edge_flick_east_west": {
+      "file": "F04_edge_flick_east_west.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "Flick East->West with edge-flick flag (bit 16) set."
+    },
+    "F05_gesture_in_progress": {
+      "file": "F05_gesture_in_progress.hex",
+      "source": "vendor pattern (Interface.pdf Table A-3 'Gesture Recognizer started' rows use word 00 00 00 80)",
+      "desc": "Recognition in progress (bit 31), code 0: no gesture event."
+    },
+    "F06_garbage_gesture": {
+      "file": "F06_garbage_gesture.hex",
+      "source": "vendor pattern (Interface.pdf Table A-3 'Garbage recognized' row uses word 01 00 00 00)",
+      "desc": "Garbage model (code 1)."
+    },
+    "F07_touch_center": {
+      "file": "F07_touch_center.hex",
+      "source": "vendor (Interface.pdf Table A-3 'Touch Center Electrode' frame, touch word 10 00 09 00)",
+      "desc": "Touch Center (bit 4), touch counter 9 (approach 45 ms)."
+    },
+    "F08_touch_center_hold": {
+      "file": "F08_touch_center_hold.hex",
+      "source": "vendor (Interface.pdf Table A-3 'Touch Counter Reset' frame, touch word 10 00 00 00)",
+      "desc": "Touch Center still held, counter reset to 0."
+    },
+    "F09_tap_center": {
+      "file": "F09_tap_center.hex",
+      "source": "vendor (Interface.pdf Table A-3 'Tap on Center electrode' frame, touch word 00 02 00 00)",
+      "desc": "Tap Center (bit 9)."
+    },
+    "F10_doubletap_center": {
+      "file": "F10_doubletap_center.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "Double Tap Center (bit 14)."
+    },
+    "F11_airwheel_step00": {
+      "file": "F11_airwheel_step00.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "AirWheel counter 00, AirWheelValid set. Baseline frame."
+    },
+    "F12_airwheel_step08": {
+      "file": "F12_airwheel_step08.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "AirWheel counter 08: +8 steps (+90 deg) from F11."
+    },
+    "F13_airwheel_step10": {
+      "file": "F13_airwheel_step10.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "AirWheel counter 10 (hex): +8 steps (+90 deg) from F12."
+    },
+    "F14_airwheel_step1e": {
+      "file": "F14_airwheel_step1e.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "AirWheel counter 1e (30 dec): setup for wrap test."
+    },
+    "F15_airwheel_step02": {
+      "file": "F15_airwheel_step02.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "AirWheel counter 02 after 30: +4 steps (+45 deg) across the 31->0 wrap."
+    },
+    "F16_status_ack_a2": {
+      "file": "F16_status_ack_a2.hex",
+      "source": "vendor (Interface.pdf Table 3-8, verbatim)",
+      "desc": "System_Status (0x15) ack to Set_Runtime_Parameter 0xA2, MaxCmdSize 0x34, ErrorCode 0x0000."
+    },
+    "F17_fw_version_valid": {
+      "file": "F17_fw_version_valid.hex",
+      "source": "synthetic (Interface.pdf Table 4-5 layout; version string transcribed from Example 3-1, NUL-padded to 120 bytes)",
+      "desc": "Fw_Version_Info (0x83), FwValid 0xAA (valid), version string '1.0.0;p:HillstarV01;...'."
+    },
+    "F18_touch_center_with_position": {
+      "file": "F18_touch_center_with_position.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "Combined frame: Touch Center (counter 9) + valid position + AirWheel counter 08. Exercises multi-field decode."
+    },
+    "F19_position_jump": {
+      "file": "F19_position_jump.hex",
+      "source": "synthetic (Interface.pdf Table 4-10)",
+      "desc": "Position jumps to x=32768, y=32768 (z=4096): exercises jump rejection / re-baseline after F01."
+    }
+  },
+  "scenarios": [
+    {
+      "name": "position_track",
+      "frames": ["F01_position_only"],
+      "expect": {
+        "canonical": ["position(x=500, y=1000, z=200)"],
+        "arduino": "onXYZ(500, 1000, 200)",
+        "python": "move(0.0076, 0.0153, 0.0031)  # raw/65536 rounded to 4 dp",
+        "hid": "mouse report delta ~= (+1.95, +3.91) px at GAIN=1/256"
+      }
+    },
+    {
+      "name": "position_jump_rebaseline",
+      "frames": ["F01_position_only", "F19_position_jump"],
+      "expect": {
+        "canonical": ["position(x=500, y=1000, z=200)", "position(x=32768, y=32768, z=4096)"],
+        "arduino": "onXYZ(500, 1000, 200); onXYZ(32768, 32768, 4096)",
+        "python": "move(0.0076, 0.0153, 0.0031); move(0.5, 0.5, 0.0625)",
+        "hid": "movement for F01 only; F19 delta (+32268, +31768) exceeds JUMP_THRESHOLD (8192) -> discarded and baseline reset to (32768, 32768) [AC-MAP-01]"
+      }
+    },
+    {
+      "name": "flick_west_east",
+      "frames": ["F02_flick_west_east"],
+      "expect": {
+        "canonical": ["gesture(code=2, class=flick, edge=false)"],
+        "arduino": "onGesture(2)  # SW_FLICK_WEST_EAST",
+        "python": "flick('west', 'east')",
+        "hid": "consumer report: Scan Next Track (0x00B5)"
+      }
+    },
+    {
+      "name": "flick_east_west",
+      "frames": ["F03_flick_east_west"],
+      "expect": {
+        "canonical": ["gesture(code=3, class=flick, edge=false)"],
+        "arduino": "onGesture(3)  # SW_FLICK_EAST_WEST",
+        "python": "flick('east', 'west')",
+        "hid": "consumer report: Scan Previous Track (0x00B6)"
+      }
+    },
+    {
+      "name": "edge_flick_east_west",
+      "frames": ["F04_edge_flick_east_west"],
+      "expect": {
+        "canonical": ["gesture(code=3, class=flick, edge=true)"],
+        "arduino": "onGesture(3)  # edge flag dropped today (D7)",
+        "python": "flick('east', 'west')  # edge flag dropped today (D7)",
+        "hid": "consumer report: Scan Previous Track (0x00B6)"
+      }
+    },
+    {
+      "name": "gesture_in_progress",
+      "frames": ["F05_gesture_in_progress"],
+      "expect": {
+        "canonical": [],
+        "arduino": "no callback (code 0)",
+        "python": "no callback (code 0)",
+        "hid": "nothing [AC-MAP-05]"
+      }
+    },
+    {
+      "name": "garbage_gesture",
+      "frames": ["F06_garbage_gesture"],
+      "expect": {
+        "canonical": ["gesture(code=1, class=garbage, edge=false)"],
+        "arduino": "onGesture(1)  # SW_GESTURE_GARBAGE",
+        "python": "_on_garbage NOT called today (D5); spec: garbage() handler fires",
+        "hid": "nothing [AC-MAP-05]"
+      }
+    },
+    {
+      "name": "touch_press_and_release",
+      "frames": ["F07_touch_center", "F08_touch_center_hold"],
+      "time_gap_ms": 250,
+      "expect": {
+        "canonical": ["touch(zone=center)", "touch(zone=center)"],
+        "arduino": "onTouch(10)  # SW_TOUCH_CENTER, once per frame (today also early-returns, D4)",
+        "python": "('touch','center') handler, subject to repeat_rate limiter (default 4/s)",
+        "hid": "left button down at F07; F08 is a repeat and must NOT re-trigger; left button release 250 ms after last touch frame (TOUCH_RELEASE_MS=200) [AC-MAP-02]"
+      }
+    },
+    {
+      "name": "tap_center",
+      "frames": ["F09_tap_center"],
+      "expect": {
+        "canonical": ["tap(zone=center)"],
+        "arduino": "onTouch(5)  # SW_TAP_CENTER",
+        "python": "('tap','center')",
+        "hid": "left click: button down for TAP_CLICK_MS (50 ms) then up [AC-MAP-03]"
+      }
+    },
+    {
+      "name": "doubletap_center",
+      "frames": ["F10_doubletap_center"],
+      "expect": {
+        "canonical": ["doubletap(zone=center)"],
+        "arduino": "onTouch(0)  # SW_DOUBLETAP_CENTER",
+        "python": "('doubletap','center')",
+        "hid": "double left click: two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]"
+      }
+    },
+    {
+      "name": "airwheel_quarter_turn_cw",
+      "frames": ["F11_airwheel_step00", "F12_airwheel_step08", "F13_airwheel_step10"],
+      "expect": {
+        "canonical": ["airwheel(+90 deg)", "airwheel(+90 deg)"],
+        "arduino": "onAirwheel(90); onAirwheel(90)",
+        "python": "airwheel(90.0); airwheel(90.0)",
+        "hid": "wheel up 8 notches, then 8 notches (11.25 deg per step) [AC-MAP-04]"
+      }
+    },
+    {
+      "name": "airwheel_wrap",
+      "frames": ["F14_airwheel_step1e", "F15_airwheel_step02"],
+      "expect": {
+        "canonical": ["airwheel(+45 deg)"],
+        "arduino": "onAirwheel(45)  # today: delta -315 deg is silently dropped (D3)",
+        "python": "airwheel(45.0)  # today: delta -315 deg is silently dropped (D3)",
+        "hid": "wheel up 4 notches. 31->0 wrap must count as +1 step, not -31 [AC-MAP-04]"
+      }
+    },
+    {
+      "name": "touch_with_position_and_airwheel",
+      "frames": ["F18_touch_center_with_position"],
+      "expect": {
+        "canonical": ["position(x=500, y=1000, z=200)", "touch(zone=center)", "airwheel(+90 deg)"],
+        "arduino": "onXYZ(500, 1000, 200); onTouch(10); airwheel SKIPPED today by early return (D4)",
+        "python": "move(0.0076, 0.0153, 0.0031); ('touch','center'); airwheel(90.0)",
+        "hid": "mouse delta + left button down + wheel up 8 notches, all from one frame [AC-MAP-06]"
+      }
+    },
+    {
+      "name": "status_ack",
+      "frames": ["F16_status_ack_a2"],
+      "expect": {
+        "canonical": ["system_status(msg_id=0xA2, error=0x0000)"],
+        "arduino": "setRuntimeParam() returns true",
+        "python": "get_status(0xA2) returns True",
+        "hid": "n/a (control message)"
+      }
+    },
+    {
+      "name": "fw_version_valid",
+      "frames": ["F17_fw_version_valid"],
+      "expect": {
+        "canonical": ["firmware_info(fw_valid=0xAA, version='1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00')"],
+        "arduino": "unimplemented (case 0x83 no-op today)",
+        "python": "no exception; version string printed (spec: FwValid must equal 0xAA to be valid, see D6)",
+        "hid": "n/a (control message)"
+      }
+    }
+  ]
+}
