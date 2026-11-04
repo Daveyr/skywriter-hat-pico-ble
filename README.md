@@ -81,3 +81,26 @@ RESET      | GPIO 17
 SCL        | GPIO 3 / SCL
 SDA        | GPIO 2 / SDA
 VCC        | 3V
+
+## Docker
+
+To use Docker to develop on skywriter, use the following command after having built the container.
+
+### Build docker
+docker build -t skywriter-dev .
+
+### Run docker
+
+docker run -it --rm \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --pids-limit 512 --memory 8g \
+  --env-file "$HOME/.config/skywriter-sandbox.env" \
+  -v "$PWD:/workspace" \
+  -v "$PWD/.git/config:/workspace/.git/config:ro" \
+  -v "$PWD/.git/hooks:/workspace/.git/hooks:ro" \
+  -v skywriter-opencode:/home/dev/.local/share/opencode \
+  -v skywriter-arduino:/home/dev/.arduino15 \
+  -v "$HOME/.gitconfig:/home/dev/.gitconfig:ro" \
+  -v "$HOME/.ssh/known_hosts:/home/dev/.ssh/known_hosts:ro" \
+  -v "$HOME/.ssh/skywriter_deploy_key:/home/dev/.ssh/id_ed25519:ro" \
+  skywriter-dev opencode --auto

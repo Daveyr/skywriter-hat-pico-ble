@@ -1,0 +1,5 @@
+# The image never copies the repository: the workspace is bind-mounted at run time.
+# Ignore everything so the build context stays tiny and nothing (datasheets, .git,
+# credentials) can reach the build.
+*
+!Dockerfile
