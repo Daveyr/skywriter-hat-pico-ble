@@ -16,15 +16,22 @@ and adjust the code for your device accordingly.
    interrupt 1 on the Leonardo
    just referred to as pin 2 for Due
 */
-#define PIN_TRFR  2
-#define PIN_RESET 3
+#define PIN_TRFR  27
+#define PIN_RESET 17
+#define PIN_SDA   20
+#define PIN_SCL   21
 
 void setup() {
   Serial.begin(9600);
   while(!Serial){};  
   
+  Wire.setSDA(PIN_SDA);
+  Wire.setSCL(PIN_SCL);
   Skywriter.begin(PIN_TRFR, PIN_RESET);
   Skywriter.onTouch(touch);
+  Skywriter.onXYZ(xyz);
+  Skywriter.onGesture(gesture);
+  Skywriter.onAirwheel(airwheel);
   
   Serial.println("Hello world!");
   
@@ -62,4 +69,20 @@ void touch(unsigned char type){
   Serial.println("Got touch ");
   Serial.print(type,DEC);
   Serial.print('\n');
+}
+
+void xyz(unsigned int x, unsigned int y, unsigned int z){
+  char buf[64];
+  sprintf(buf, "XYZ: %u %u %u", x, y, z);
+  Serial.println(buf);
+}
+
+void gesture(unsigned char type){
+  Serial.print("Gesture: ");
+  Serial.println(type, DEC);
+}
+
+void airwheel(int delta){
+  Serial.print("Airwheel: ");
+  Serial.println(delta);
 }
