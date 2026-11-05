@@ -194,12 +194,25 @@ class SkywriterHIDMapper {
   // pending accumulated movement immediately so nothing is lost.
   void finish(unsigned long now_ms);
 
+  // BLE disconnect (specs/ble_hid.md §6, fix_plan item P3.17): the radio
+  // link went down. Every held hold-row (buttons and auto-scroll) is
+  // released immediately through the sink, un-sent pointer movement is
+  // DROPPED (the §6 "Unconnected" row: sensor events are dropped, not
+  // queued, so state approximating "now" must not replay on the new link),
+  // the AirWheel accumulator clears (the lift-off reset of §5), and the
+  // next valid position silently re-baselines (§3 rule 4 — the disconnect
+  // is the lift-off of the wireless session). The firmware's disconnect
+  // path calls this once per link loss; the sink may then go silent — a
+  // release for a button the radio can no longer tell the host about is
+  // still the correct *local* state, and the host-side residue is wiped by
+  // the firmware's neutral resync report on (re)connect (AC-BLE-07).
+  void disconnect(unsigned long now_ms);
+
  private:
   void attempt_report(unsigned long now_ms, bool force);
-  // §4 explicit-release trigger (lift-off; a future disconnect path would
-  // call the same via a public wrapper when the firmware needs it, P3.17):
-  // every held hold-row (buttons and auto-scroll) goes up/clears
-  // immediately, in zone order.
+  // §4 explicit-release trigger (lift-off; the BLE life-cycle's public
+  // disconnect() funnels through this): every held hold-row
+  // (buttons and auto-scroll) goes up/clears immediately, in zone order.
   void release_all_buttons();
 
   HIDMapperSink& sink_;

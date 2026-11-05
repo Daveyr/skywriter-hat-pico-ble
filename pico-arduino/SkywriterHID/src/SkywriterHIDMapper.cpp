@@ -352,6 +352,35 @@ void SkywriterHIDMapper::tick(unsigned long now_ms) {
   attempt_report(now_ms, false);
 }
 
+void SkywriterHIDMapper::disconnect(unsigned long now_ms) {
+  // specs/ble_hid.md §6, fix_plan item P3.17. The BLE link is gone; put the
+  // engine into the "fresh session" state exactly as §6's Unconnected row
+  // and §3 rule 4 demand:
+  //   1. every held hold-row goes up through the sink right away — the
+  //      up-transitions are legitimate protocol statements (a later button
+  //      state is reported whole in every mouse report anyway, and a host
+  //      that missed them is cleared by the firmware's neutral resync
+  //      report on the next connect, AC-BLE-07);
+  //   2. pointer movement that never got a report (pending_dx_/dy_) is
+  //      DROPPED, not flushed — reports while unconnected are dropped and
+  //      a reconnecting host must not see unsent movement from the old
+  //      link replayed;
+  //   3. the AirWheel accumulator clears (same rationale as §5's lift-off
+  //      reset: a fractional notch pending from before the gap must not
+  //      leak into the next rotation gesture);
+  //   4. the next valid position silently re-baselines (have_prev_ = false,
+  //      §3 rule 4 — the wireless-session equivalent of lift-off), so a
+  //      hand tracked at a different spot after reconnect cannot produce
+  //      one giant stale-delta cursor flight or trip jump rejection by
+  //      accident.
+  (void)now_ms;
+  release_all_buttons();
+  pending_dx_ = 0.0f;
+  pending_dy_ = 0.0f;
+  wheel_acc_ = 0.0f;
+  have_prev_ = false;
+}
+
 void SkywriterHIDMapper::release_all_buttons() {
   for (int zone = 0; zone < kZoneCount; ++zone) {
     if (held_[zone]) {

@@ -25,13 +25,39 @@
     `SKYWRITER_DEVICE_NAME` below) with a HID-class appearance value.
   - AC-BLE-02 — ONE composite HID device (pointer + keyboard + media keys in
     a single HID Report Map), started with exactly ONE `startHID`.
+  - AC-BLE-03 (software side) — pairing needs no sketch code: the core's
+    Security Manager auto-confirms the "Just Works" pairing and the
+    numeric-comparison variant, and requests bonding; the battery + device
+    information services come from the same stack (see §5 note below).
+  - AC-BLE-07 (software side) — the connection life cycle of §6: sensor
+    events are dropped while no host is connected, every held button/scroll
+    state is released on link loss (via the mapper's `disconnect()`), and
+    one neutral report resyncs the host on (re)connect.
+  - AC-BLE-04 (button half) — press/release transitions go out as soon as
+    they happen through the pulse queue; move-report pacing is P3.18.
 
-  Bring-up order follows specs/ble_hid.md §6 (Boot row): the sensor stack is
-  configured first, then the Bluetooth radio starts, then the Pico W
-  advertises.
+  Connection life cycle (specs/ble_hid.md §6, P3.17): the Bluetooth stack's
+  callbacks do nothing but record the state change and restart advertising
+  — see the important note at on_ble_opened() about why they must not send
+  HID reports themselves. All other life-cycle work (battery refresh, the
+  neutral resync report, dropping the mapping-engine's held state) happens
+  in loop().
 
-  Lifecycle, pairing, battery-at-connect and unconnected behaviour are
-  Phase-3 item P3.17 (specs/ble_hid.md §5, §6, §8).
+  Pairing and bonding (specs/ble_hid.md §5): pairing is entirely inside the
+  Bluetooth stack (Just Works auto-confirmed, numeric comparison
+  auto-confirmed, bonding requested at startHID). KNOWN LIMITATION, gated by
+  AC-BLE-06: this core's Security Manager keeps bond data in RAM only (its
+  device-database backend is the RAM store; the flash-backed store is not
+  wired up in the arduino port), so after a Pico W power cycle hosts must
+  re-pair on this core version — verify on hardware (P4.3) before treating
+  as a spec deviation.
+
+  Battery (specs/ble_hid.md §8): the Pico W is USB-powered, so the battery
+  service starts at 100 % (startHID's default battery=100) and is refreshed
+  to 100 % at connect time directly through `PicoBluetoothBLEHID.setBattery`
+  — NOT `MouseBLE.setBattery()`, which is unusable here (`MouseBLE_`'s own
+  enable flag is never set by the core, not even by its own `begin()`, so
+  that wrapper silently does nothing).
 
   Wiring (Pico W → Skywriter board): GP4 = SDA, GP5 = SCL (the default I2C
   bus of the arduino-pico core), GP9 = TRFR/TS (data-ready / transfer line),
@@ -263,6 +289,15 @@ static void pulses_tick(unsigned long now_ms) {
   }
 }
 
+// §6 "Unconnected": not only are sensor events dropped, their scheduled
+// HID transitions must not survive the link either — a tap whose 50 ms
+// release pulse fell into a link loss must not be delivered to the NEXT
+// connection. The disconnect drain in loop() clears the queue; queued
+// entries never fired carry no radio-reachable state.
+static void pulses_clear() {
+  pulse_count = 0;
+}
+
 class BLEHIDSink : public HIDMapperSink {
  public:
   // §3: relative pointer movement. The BLE HID mouse report carries one
@@ -379,20 +414,78 @@ static TouchKind kind_for_touch_code(unsigned char code) {
   return TOUCH_HOLD;
 }
 
+// ---------------------------------------------------------------------------
+// Connection life cycle state (specs/ble_hid.md §6, P3.17)
+//
+// The Bluetooth callbacks fire from inside the Bluetooth stack's own
+// run-loop context. Calling the HID send API from that context is exactly
+// the kind of call `PicoBluetoothBLEHID.send()` cannot honour there: it
+// busy-waits on the stack's own send-completion round trip, which needs
+// that same context to progress — a send from a callback would deadlock.
+// The callbacks therefore only record the state change (and restart
+// advertising, the one BTstack operation that IS safe and canonical from a
+// packet handler); all HID-visible life-cycle work runs in loop().
+// ---------------------------------------------------------------------------
+
+// Set by on_ble_opened (fires when the host enables HID input reports),
+// drained once in loop(): battery refresh + neutral resync report.
+static volatile bool ble_connect_event = false;
+// Set by on_ble_closed (fires on link loss), drained once in loop():
+// release-all through mapper.disconnect(), pulse-queue clear, keyboard
+// clear.
+static volatile bool ble_disconnect_event = false;
+// One-per-link-loss serial notice for the hardware probe (AC-BLE-07):
+// "sensor events are now being dropped" — set at boot and on link loss,
+// cleared at connect, printed by the first suppressed event frame.
+static volatile bool ble_drop_notice_needed = true;
+
+// §6 "Connected": the host consumes reports only while the link exists.
+// The same read also backs "Unconnected: sensor events are dropped, not
+// queued" — the sensor callbacks below early-return on it.
+static bool ble_link_open() {
+  return PicoBluetoothBLEHID.connected();
+}
+
+// Printed once per unconnected period by the first suppressed sensor
+// frame — the hardware probe's evidence line that events are genuinely
+// dropped (AC-BLE-07), not accumulated and replayed.
+static void sensor_drop_notice() {
+  if (ble_drop_notice_needed) {
+    ble_drop_notice_needed = false;
+    Serial.println("SKYSTATE sensor_events_dropping_unconnected");
+  }
+}
+
 static void on_sensor_xyz(unsigned int x, unsigned int y, unsigned int z) {
+  if (!ble_link_open()) {
+    sensor_drop_notice();
+    return;  // §6 Unconnected: dropped, not queued
+  }
   mapper.onPosition((uint16_t)x, (uint16_t)y, (uint16_t)z, millis());
 }
 
 static void on_sensor_touch(unsigned char code) {
+  if (!ble_link_open()) {
+    sensor_drop_notice();
+    return;
+  }
   mapper.onTouch(zone_for_touch_code(code), kind_for_touch_code(code),
                  millis());
 }
 
 static void on_sensor_gesture(unsigned char gesture) {
+  if (!ble_link_open()) {
+    sensor_drop_notice();
+    return;
+  }
   mapper.onGesture(gesture, millis());
 }
 
 static void on_sensor_airwheel(float degrees) {
+  if (!ble_link_open()) {
+    sensor_drop_notice();
+    return;
+  }
   mapper.onAirwheel(degrees, millis());
 }
 
@@ -414,19 +507,27 @@ static void on_sensor_firmware_version(unsigned char fw_valid,
   Serial.println(version);
 }
 
-// BLE link state onto the serial console (specs/ble_hid.md §6 — the hardware
-// probe asserts on these lines). The full reconnect/resync/battery lifecycle
-// is fix item P3.17; these prints only report the state transitions.
+// BLE link state (specs/ble_hid.md §6 — the hardware probe asserts on
+// these lines). Callback-context rules: see the life-cycle block above —
+// these handlers only set flags (and restart advertising, safe from a
+// packet handler); the drains in loop() do all the HID-visible work.
 static void on_ble_opened(uint8_t type, uint16_t channel, uint8_t* packet,
                           uint16_t size) {
   (void)type; (void)channel; (void)packet; (void)size;
-  Serial.println("SKYSTATE ble_connected");
+  ble_connect_event = true;
 }
 
 static void on_ble_closed(uint8_t type, uint16_t channel, uint8_t* packet,
                           uint16_t size) {
   (void)type; (void)channel; (void)packet; (void)size;
-  Serial.println("SKYSTATE ble_advertising");
+  // AC-BLE-05: return to advertising within 5 s of a link loss — restart
+  // it HERE, inside the stack's own context (the canonical BTstack place;
+  // the addressable data and parameters were set at startHID). No send() /
+  // report call allowed in this context — the flag below schedules the
+  // state teardown in loop().
+  gap_advertisements_enable(1);
+  ble_drop_notice_needed = true;
+  ble_disconnect_event = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,39 +551,90 @@ void setup() {
   Skywriter.onSystemStatus(on_sensor_status);
   Skywriter.onFirmwareVersion(on_sensor_firmware_version);
 
-  // 3. Now the radio. Exactly ONE begin() — KeyboardBLE's — so `startHID`
-  //    runs exactly once (AC-BLE-02). Because both MouseBLE and KeyboardBLE
-  //    libraries are linked in, `__SetupHIDreportmap` merges pointer,
-  //    keyboard AND consumer-control descriptors into the single Report Map
+  // 3. Now the radio. The link callbacks are registered BEFORE begin() —
+  //    afterwards `startHID` powers the radio on and a host that connects
+  //    during bring-up would otherwise fire into unregistered callbacks.
+  //    (Each handler only sets a flag; loop() does the HID-visible work.)
+  PicoBluetoothBLEHID.setOpenedCB(on_ble_opened);
+  PicoBluetoothBLEHID.setClosedCB(on_ble_closed);
+
+  // 4. Exactly ONE begin() — KeyboardBLE's — so `startHID` runs exactly
+  //    once (AC-BLE-02). Because both MouseBLE and KeyboardBLE libraries
+  //    are linked in, `__SetupHIDreportmap` merges pointer, keyboard AND
+  //    consumer-control descriptors into the single Report Map
   //    (AC-BLE-02), and `__BLEGetAppearance()` (used inside that begin)
   //    advertises HID-class semantics for the composite device (AC-BLE-01).
   //    The Battery Service starts at 100 % through startHID's default
-  //    (specs/ble_hid.md §8; §8's connect-time behaviour is P3.17).
+  //    (specs/ble_hid.md §8) and is refreshed to 100 % at connect time in
+  //    loop() (AC-BLE-03).
   KeyboardBLE.begin(SKYWRITER_DEVICE_NAME, SKYWRITER_DEVICE_NAME);
   Serial.print("SKYSTATE hid_started name=");
   Serial.print(SKYWRITER_DEVICE_NAME);
   Serial.print(" appearance=0x");
   Serial.println(__BLEGetAppearance(), HEX);
 
-  // 4. The mouse half's `begin()` was deliberately skipped (it would have
+  // 5. The mouse half's `begin()` was deliberately skipped (it would have
   //    started the HID transport twice). The only other state `begin()`
   //    would have initialised is the mouse base class's public enable bit —
   //    without it every press/release is silently ignored — so set that one
   //    bit directly (static up-cast: the bit lives on HID_Mouse).
   HID_Mouse& mouse_base = MouseBLE;
   mouse_base._running = true;
-
-  PicoBluetoothBLEHID.setOpenedCB(on_ble_opened);
-  PicoBluetoothBLEHID.setClosedCB(on_ble_closed);
 }
 
 void loop() {
-  // Every polled sensor frame dispatches into the mapping engine...
+  unsigned long now = millis();
+
+  // ---- life-cycle drains (specs/ble_hid.md §6) must run BEFORE the new
+  // sensor events of this iteration reach the engine, so the mapper is
+  // always in a clean "fresh session" state when its inputs arrive.
+
+  if (ble_disconnect_event) {
+    ble_disconnect_event = false;
+    // 1. The mapping engine forgets the whole session: held buttons/scroll
+    //    rows released (mapper.disconnect), unsent movement dropped, wheel
+    //    accumulator cleared, next position re-baselines (§6 Unconnected,
+    //    AC-BLE-07's no-stale-replay half).
+    mapper.disconnect(now);
+    // 2. Sketch-side state the engine does not know about: scheduled
+    //    tap/media pulses die with the link (pulses_clear) and the
+    //    Bluetooth wrappers' own latched state is zeroed so the neutral
+    //    resync report below really is neutral — MOUSE_ALL releases every
+    //    mouse button bit, KeyboardBLE.releaseAll() clears the latched
+    //    keyboard report (both no-op when nothing was held).
+    pulses_clear();
+    MouseBLE.release(MOUSE_ALL);
+    KeyboardBLE.releaseAll();
+    Serial.println("SKYSTATE ble_dropped");
+    Serial.println("SKYSTATE ble_advertising");
+  }
+
+  if (ble_connect_event) {
+    ble_connect_event = false;
+    ble_drop_notice_needed = false;
+    // §8: battery reported 100 % at connect — through PicoBluetoothBLEHID
+    // directly (see the battery note in the file header; MouseBLE's
+    // battery wrapper is unusable).
+    PicoBluetoothBLEHID.setBattery(100);
+    // §6/AC-BLE-07: the neutral resync report, once per (re)connect — no
+    // buttons (the wrapper's latched state was cleared above), zero
+    // deltas, zero wheel. `MouseBLE.move(0, 0, 0)` always emits (its
+    // zero-suppression lives in the mapper, not here), so hosts see a
+    // whole-state report that wipes any button state they kept from the
+    // previous link. A consumer (media) key whose 50 ms release pulse fell
+    // into the link loss is wiped host-side by the zero consumer report.
+    KeyboardBLE.consumerRelease();
+    MouseBLE.move(0, 0, 0);
+    Serial.println("SKYSTATE ble_resync battery=100 neutral_report");
+    Serial.println("SKYSTATE ble_connected");
+  }
+
+  // Every polled sensor frame dispatches into the mapping engine... (the
+  // callbacks drop events while no host is connected, §6 Unconnected).
   Skywriter.poll();
   // ...and the engine's timing work (lift-off gating, release-by-silence,
   // coalesced report cadence, hold auto-scroll) runs every loop iteration,
   // driven by the millis() clock.
-  unsigned long now = millis();
   mapper.tick(now);
   pulses_tick(now);
 }
