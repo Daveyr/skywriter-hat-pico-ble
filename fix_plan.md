@@ -135,6 +135,11 @@ docker run -it --rm \
    airwheel event on both drivers, new fixture F23 (`touch_two_zones`
    scenario) covers a two-touch frame. The D4 row is gone from
    `specs/README.md`. 29 pytest tests; `run_tests.sh` green 4/4.
+   Update (2026-11-05, P3.11 commit): deviation D7 is closed — the Arduino
+   driver now decodes the full 32-bit GestureInfo word, so every gesture
+   expectation (code + class + edge-flick flag) is a hard assertion on both
+   drivers; the `keys_pending` annotations and the D7 ledger row are gone.
+   29 pytest tests; `run_tests.sh` green 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -211,7 +216,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.8 → done, moved to the Done section below.
 - [x] P3.9 → done, moved to the Done section below.
 - [x] P3.10 → done, moved to the Done section below.
-- [ ] P3.11 Deviation D7 — same gesture-attribute fix as P3.7.
+- [x] P3.11 → done, moved to the Done section below.
 - [ ] P3.11b Deviation D9 — surface control-frame results as canonical
       events (discovered by P3.2): Python `_handle_status_info` /
       `_handle_firmware_info` parse their payload and emit a record the
@@ -343,6 +348,47 @@ attribute table limit).
 
 ## Done
 
+- P3.11 — Deviation D7 closed (commit `32076e1`): the **Arduino** driver now
+  decodes the full 32-bit GestureInfo word in exactly the way the Python
+  driver has since P3.7, so both drivers carry the gesture attributes and
+  AC-MAP-09 parity holds with no tolerance left on gesture events. Parts:
+  - `arduino/Skywriter/skywriter.cpp` gesture branch: assembles the full
+    32-bit little-endian GestureInfo word (Interface.pdf §4.5 Table 4-10)
+    instead of reading byte 0 — code = bits 0–7, class = bits 12–15
+    (0 garbage, 1 flick, 2 circle), edge = bit 16 — and stores
+    `last_gesture_class` (unsigned char) / `last_gesture_edge` (bool) as
+    **public state alongside `last_gesture`** (the C++ counterpart of the
+    Python driver's `gesture` / `gesture_class` / `gesture_edge` globals;
+    naming follows the existing `last_gesture`/`last_touch` convention),
+    set **before** `handle_gesture` dispatch. Recognition-in-progress
+    frames (bit 31, code 0) still emit nothing — the unchanged code>0 gate
+    already covers hid_mapping.md §2's requirement.
+  - `skywriter.h`: the two new public members with the Interface.pdf
+    citation. Deliberate design note: attributes are public state, not new
+    callback parameters — `onGesture(void (*)(unsigned char))` is
+    unchanged, so the two shipped example sketches (NeoPaint, SkyPainter)
+    register their handlers unchanged and still compile (verified by the
+    firmware-compile check on all three).
+  - Harness: `tests/cpp/host_decoder_main.cpp` prints
+    `EV GESTURE <code> <class> <edge>` from inside its `on_gesture`
+    callback (the attributes are set before dispatch, so the snapshot
+    trick is exact — the same technique the Python adapter uses on the
+    driver's globals); `tests/adapters_cpp.py` parses the record with
+    class/edge; `tests/canonical.py`'s cpp converter now emits the same
+    code/class/edge shape as the Python converter (the docstring's
+    `keys_pending` example updated: D7 was the mechanism's last user).
+  - Self-arming flip: the six `keys_pending D7` annotations dropped from
+    `specs/fixtures/manifest.json` (flick_west_east, flick_east_west,
+    edge_flick_east_west, garbage_gesture, circle_clockwise,
+    circle_counter_clockwise) — code/class/edge are now hard assertions on
+    BOTH drivers; D7 row removed from `specs/README.md`; revision note
+    added to the manifest notes; the open-deviation enumerations updated in
+    `tests/README.md`, the docstrings of `tests/test_harness.py` /
+    `tests/test_scenarios.py` (now "D8, D9") and `tests/adapters_python.py`.
+  - Verified against the recompiled host decoder: F02 → code 2 / class 1 /
+    edge false, F04 → edge **true**, F06 → code 1 / class 0, F21/F22 →
+    class 2; the `test_cpp_adapter_flick_dispatch` plumbing pin asserts the
+    full record shape.
 - P3.10 — Deviation D4 closed (commit `fc0853e`): **every set touch bit in a
   frame now produces its event on both drivers**, and the frame's remaining
   fields are still decoded in the same pass. Per `hid_mapping.md` §2 ("all
