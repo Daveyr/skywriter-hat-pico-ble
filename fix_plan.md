@@ -131,7 +131,7 @@ docker run -it --rm \
       passes for all example sketches. Host note: if `run_tests.sh` is run
       on the host (not in the container), the host also needs
       `arduino-cli lib install "Adafruit NeoPixel"`.
-- [ ] W7 Dry-run the loop: `RALPH_MAX_ITER=1 docker run … skywriter-dev
+- [x] W7 Dry-run the loop: `RALPH_MAX_ITER=1 docker run … skywriter-dev
       bash ralph.sh` — confirm the agent commits, logs land in `logs/`, marker
       files stop the loop. Fix any friction found.
 
@@ -305,3 +305,18 @@ attribute table limit).
   picks the wrong I2C bus number.
 - `run_tests.sh` comment for the Python unit test updated to reflect green
   status (W5 row removed; details live here).
+- W7 — loop dry-run verified (this commit). Note on how: `docker run` cannot
+  be executed *from inside* the container (docker is a host tool), so the
+  raw `RALPH_MAX_ITER=1 docker run` command was exercised in two halves:
+  - Live half, already observable from inside: the loop is running these very
+    iterations — agent commits land (`0847dc2` made by iteration 001) and the
+    per-iteration logs land in `logs/ralph-N01-*.log`.
+  - Mechanism half, verified by driving `bash ralph.sh` itself against a fake
+    `opencode` agent directory in a throwaway git clone (`/tmp/w7-dryrun`),
+    with `RALPH_MAX_ITER` budget: (a) uncommitted agent work triggers the
+    automatic snapshot commit; (b) a `DONE` marker stops the loop after one
+    iteration of a 5-iteration budget; (c) `READY_FOR_HW` stops the loop, and
+    on restart with `HW_REPORT.md` present the marker is consumed and the
+    loop continues; (d) a stale `DONE` at start exits immediately without
+    running the agent; (e) a failing `git push` is tolerated with a clear
+    message. No friction found; no script changes needed.
