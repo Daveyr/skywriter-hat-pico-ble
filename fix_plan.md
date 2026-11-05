@@ -83,6 +83,9 @@ docker run -it --rm \
   Update (this commit): W6 is now verified green — see the W6 item.
   Update (2026-11-05, W5 commit): W5 is verified green too; every check in
   `bash run_tests.sh` passes.
+  Update (2026-11-05, P3.1 commit): the replay tests are no longer
+  "skipped, not a failure" — `tests/` exists and all 11 harness meta-tests
+  pass; `bash run_tests.sh` remains green end-to-end (4/4 checks).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -143,12 +146,7 @@ library both use). Python driver fixes go to `library/`.
 
 ### 3a — Replay harness (must exist before decoder/fix items)
 
-- [ ] P3.1 Replay test harness skeleton `tests/`: a driver-agnostic runner
-      that loads `specs/fixtures/manifest.json`, plays each scenario's frames
-      in order into a **fresh decoder state**, uses a **virtual clock** for
-      `time_gap_ms` (no sleeping), and can feed the records to either the
-      Python driver adapters or a C++ decoder compiled for the host. Picked
-      up automatically by `run_tests.sh`.
+- [x] P3.1 → done, moved to the Done section below.
 - [ ] P3.2 Structured expectation grammar: replace the manifest's prose
       `expect` fields with a machine-checkable format (structured event list,
       e.g. `{"event": "airwheel", "degrees": +45}`, plus per-scenario HID
@@ -270,6 +268,53 @@ attribute table limit).
 
 ## Done
 
+- P3.1 — fixture-replay harness skeleton landed (this commit): `tests/` is a
+  pytest package picked up automatically by `run_tests.sh`'s existing
+  `fixture_replay` check. Parts (see `tests/README.md` for the full map):
+  - `runner.py` — driver-agnostic runner: manifest scenario → frames replayed
+    in order into a **fresh decoder state**; `time_gap_ms` is applied on a
+    **VirtualClock** (`virtual_clock.py`) with zero wall-clock sleeping, once
+    between consecutive frames and once after the last frame so a later
+    mapping adapter can evaluate timed outcomes (release-by-silence).
+  - `adapters_python.py` — Python driver adapter: imports
+    `library/skywriter/__init__.py` with mocked hardware (same verification as
+    `library/test.py`), registers capture handlers on the driver's own
+    callback globals (bypassing `setup()` so no bus thread starts), mirrors
+    `_do_poll`'s message-ID dispatch and feeds the **payload** (frame minus
+    the 4-byte header) per the manifest convention, then records whatever the
+    decoder emits. The driver's wall-clock `millis()` is redirected onto the
+    VirtualClock so touch repeat-limiting is simulated time.
+  - `adapters_cpp.py` + `cpp/` — C++ decoder adapter: the *real* Arduino
+    driver (`arduino/Skywriter/skywriter.cpp`) compiled as a host program
+    behind minimal `Arduino.h`/`Wire.h` shims (`tests/cpp/`), driven through
+    its genuine `poll()` code path once per fed frame. One process per
+    scenario keeps decoder state fresh; the binary is hash-cached in
+    `tests/build/` (matches the existing `build/` .gitignore rule) so
+    repeated runs don't recompile.
+  - `test_harness.py` — 11 meta-tests: manifest/frame integrity, every
+    scenario replays on both adapters, fresh-state identity on reruns,
+    simulated-gap accounting, VirtualClock non-sleeping, plus today-true
+    plumbing pins (F01 position values on both drivers, flick W→E dispatch,
+    tap dispatch). Assertions deliberately cover only behaviour that already
+    matches the spec — per-scenario spec assertions (AC-MAP-01…06) land with
+    P3.2 + the decoder fixes P3.3–P3.11, keeping `run_tests.sh` green while
+    each fix flips one more expectation from unchecked to verified.
+- Environment note discovered by P3.1 (this commit): the Alpine container has
+  **no host C++ compiler and no sudo/root** (`g++`, `clang++`, apk tools all
+  absent — only the ARM cross-compiler inside the rp2040 arduino core is
+  shipped, which cannot build host binaries). Resolved without root:
+  `pip install --user --break-system-packages ziglang` — the `ziglang` PyPI
+  wheel is a complete C++ toolchain (`python3 -m ziglang c++ …`) and works on
+  this musl image (verified: compiled a test binary, exit code checked).
+  `tests/adapters_cpp.py` resolves the compiler as `g++`/`c++` → `zig` on
+  PATH → `python3 -m ziglang c++`, and fails loudly with install instructions
+  if none is found (never a silent skip). The Dockerfile now also installs
+  `g++ musl-dev` for future image rebuilds; **not yet verified by an actual
+  image rebuild** (docker is host-only) — spread this verification to the
+  next host-side docker-touching session. The pip ziglang install is
+  user-local and dies with the current container; until the image is
+  rebuilt, a fresh container needs the `pip install` above before
+  `run_tests.sh`.
 - Phase 0 — repository hygiene: clean tree, sandbox image + loop volumes
   ready, model subscriptions visible to the agent.
 - Phase 1 — acceptance specs written and committed (`1c0b12a`):
@@ -328,3 +373,49 @@ attribute table limit).
   should either merge `ralph-dry-run` into `pico-ble` when the dry-run
   phase is complete, or run
   `git push --set-upstream origin ralph-dry-run` once.
+- P3.1 — fixture-replay harness skeleton landed (this commit): `tests/` is a
+  pytest package picked up automatically by `run_tests.sh`'s existing
+  `fixture_replay` check. Parts (see `tests/README.md` for the full map):
+  - `runner.py` — driver-agnostic runner: manifest scenario → frames replayed
+    in order into a **fresh decoder state**; `time_gap_ms` is applied on a
+    **VirtualClock** (`virtual_clock.py`) with zero wall-clock sleeping, once
+    between consecutive frames and once after the last frame so a later
+    mapping adapter can evaluate timed outcomes (release-by-silence).
+  - `adapters_python.py` — Python driver adapter: imports
+    `library/skywriter/__init__.py` with mocked hardware (same verification as
+    `library/test.py`), registers capture handlers on the driver's own
+    callback globals (bypassing `setup()` so no bus thread starts), mirrors
+    `_do_poll`'s message-ID dispatch and feeds the **payload** (frame minus
+    the 4-byte header) per the manifest convention, then records whatever the
+    decoder emits. The driver's wall-clock `millis()` is redirected onto the
+    VirtualClock so touch repeat-limiting is simulated time.
+  - `adapters_cpp.py` + `cpp/` — C++ decoder adapter: the *real* Arduino
+    driver (`arduino/Skywriter/skywriter.cpp`) compiled as a host program
+    behind minimal `Arduino.h`/`Wire.h` shims (`tests/cpp/`), driven through
+    its genuine `poll()` code path once per fed frame. One process per
+    scenario keeps decoder state fresh; the binary is hash-cached in
+    `tests/build/` (gitignored) so repeated runs don't recompile.
+  - `test_harness.py` — 11 meta-tests: manifest/frame integrity, every
+    scenario replays on both adapters, fresh-state identity on reruns,
+    simulated-gap accounting, VirtualClock non-sleeping, plus today-true
+    plumbing pins (F01 position values on both drivers, flick W→E dispatch,
+    tap dispatch). Assertions deliberately cover only behaviour that already
+    matches the spec — per-scenario spec assertions (AC-MAP-01…06) land with
+    P3.2 + the decoder fixes P3.3–P3.11, keeping `run_tests.sh` red→green
+    per fix, never red-by-design.
+- Environment note discovered by P3.1 (this commit): the Alpine container has
+  **no host C++ compiler and no sudo/root** (`g++`, `clang++`, apk tools all
+  absent — only the ARM cross-compiler inside the rp2040 arduino core is
+  shipped, which cannot build host binaries). Resolved without root:
+  `pip install --user --break-system-packages ziglang` — the `ziglang` PyPI
+  wheel is a complete C++ toolchain (`python3 -m ziglang c++ …`) and works on
+  this musl image (verified: compiled a test binary, exit code checked).
+  `tests/adapters_cpp.py` resolves the compiler as `g++`/`c++` → `zig` on
+  PATH → `python3 -m ziglang c++`, and fails loudly with install instructions
+  if none is found (never a silent skip). The Dockerfile now also installs
+  `g++ musl-dev` for future image rebuilds; **not yet verified by an actual
+  image rebuild** (docker is host-only) — spread this verification to the
+  next host-side docker-touching session. The pip ziglang install is
+  user-local and dies with the current container; until the image is
+  rebuilt, a fresh container needs the `pip install` above before
+  `run_tests.sh`.
