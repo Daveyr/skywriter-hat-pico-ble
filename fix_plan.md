@@ -275,16 +275,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.13 → done, moved to the Done section below.
 - [x] P3.14 → done, moved to the Done section below.
 - [x] P3.15 → done, moved to the Done section below.
-- [ ] P3.15b Fixture-corpus gap fill (discovered by P3.2): the corpus has no
-      scenario that exercises actual pointer movement (F01, then a second
-      valid *moderately different* position → a real mouse delta), nor any
-      fixture for several §6 rows: `touch(north/south)` hold auto-scroll,
-      `tap(east/west/north/south)` right-click + middle-click + Page Up /
-      Page Down rows, `doubletap(east/west)` reserved (nothing) rows, and
-      S→N/N→S volume flicks. Add frames per `specs/fixtures/README.md`
-      ("Adding fixtures") with structured expectations; needed for the
-      P3.12–P3.15 assertions and `AC-MAP-01`, `AC-MAP-02`, `AC-MAP-03`,
-      `AC-MAP-08`.
+- [x] P3.15b → done, moved to the Done section below.
 
 ### 3e — BLE HID firmware (`pico-arduino/`) — software written here, verified
 in Phase 4 on hardware
@@ -395,6 +386,45 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.15b — the fixture corpus now covers every remaining §6 row the ledger
+  item listed (commit `86b19fd`). The pointer-movement half of the item
+  (F01 → a second *moderately different* valid position → a real mouse
+  delta) was already closed offline by P3.12 (frames F24/F25, scenarios
+  `pointer_move` / `pointer_lift_off_rebaseline`), so this item covered the
+  §6-row gaps:
+  - **Tap rows on real frames**: F26 tap(east) → right click, F27 tap(west)
+    → middle click, F28 tap(north) → keyboard Page Up (usage 78), F29
+    tap(south) → Page Down (usage 79) — one `tap_<zone>` scenario each,
+    click records carrying the TAP_CLICK_MS = 50 rule; the keyboard
+    scenarios double as the offline "nothing on the wrong report" pin for
+    the keyboard channel [AC-MAP-03, AC-MAP-08].
+  - **Reserved doubletap rows**: F30 (bit 13, east) + F31 (bit 11, west) in
+    one `doubletap_east_west_reserved` scenario — the doubletap events are
+    hard-asserted on BOTH decoders (different zones, so the Python driver's
+    per-zone touch repeat limiter cannot suppress the second frame even at
+    the default 5 ms replay gap) and `expect.hid` pins the deliberate
+    silence (already mapper-pinned by P3.15's unit tests) [AC-MAP-08].
+  - **Vertical volume flicks**: F32 flick S→N (GestureInfo word
+    `04 10 00 00`) → consumer Volume Increment 233, F33 flick N→S
+    (`05 10 00 00`) → Volume Decrement 234 — `flick_south_north` /
+    `flick_north_south` [AC-MAP-05, AC-MAP-08].
+  - **Hold auto-scroll on real touch frames**: F34 touch(north) (bit 2,
+    counter 9) + F35 touch(south) (bit 0) with `time_gap_ms: 350` — each
+    replayed hold emits its hold-start notch then interval notches at
+    exactly t=100 and t=200 ms (the 200 ms tick still counts as held,
+    TOUCH_RELEASE_MS is strict), the release fires strictly past 200 ms
+    (t=205) and stops scrolling: exactly three `wheel −1` (north) / `+1`
+    (south) records each [AC-MAP-08; §6 row literals, not §5 convention].
+  - Arm flip: all seven new scenarios are in `MAPPING_ENGINE_ARMED`
+    (`tests/test_scenarios.py`) and hard-asserted end-to-end through the
+    real C++ driver → SkywriterHIDMapper chain; manifest gained a dated
+    P3.15b revision note; `specs/hid_mapping.md` §8's AC-MAP-03/05/08
+    fixture lists updated to cite the new fixtures/scenarios.
+  Verified: `bash run_tests.sh` green 4/4; 69 pytest tests (same test-
+  function count — the suite counts functions; the 9 new scenarios assert
+  inside the existing per-scenario tests; scenario count 20 → 29, frames
+  25 → 35).
 
 - P3.15 — the FULL §6 default mapping profile is live in the mapping engine
   as the single implementation table (commit `5dab347`). Everything
