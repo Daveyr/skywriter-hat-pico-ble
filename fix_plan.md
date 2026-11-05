@@ -164,8 +164,21 @@ library both use). Python driver fixes go to `library/`.
 ### 3b — Python driver defects (`library/skywriter/__init__.py`) — one per item
 
 - [x] P3.3 → done, moved to the Done section below.
-- [ ] P3.5 Deviation D5 — dispatch `_on_garbage` for gesture code 1 (today
-      the gesture branch ignores it).
+- [x] P3.5 → done, moved to the Done section below.
+- [ ] P3.5b Deviation D10 (new row in `specs/README.md`, discovered while
+      closing D5) — the Python driver silently discards circle gestures
+      (wire codes 6/7, clockwise/counter-clockwise): the gesture branch in
+      `_handle_sensor_data` matches codes 6/7 in the `gestures` list but
+      dispatches only garbage/flick, and `_on_circle` (module line 70) is
+      dead code — nothing can even register into it, since no `circle()`
+      decorator exists. Decide the surface (e.g. a `circle(direction)`
+      decorator, or the canonical `gesture` event path the harness already
+      models for codes 6/7), dispatch it, and note that no fixture
+      currently exercises the AirWheel-disabled mask (bit 3 off) that the
+      spec requires for circles to be recognized — see the §6
+      "Circle/AirWheel exclusivity" note; a synthetic fixture with that
+      mask would be needed to test it. Coordinated with P3.15 (the §6
+      circle→Consumer volume rows).
 - [ ] P3.6 Deviation D6 — firmware version valid only when `FwValid == 0xAA`.
 - [ ] P3.7 Deviation D7 — carry gesture attributes (class bits 12–15, edge
       flick bit 16, in-progress bit 31) into the decoded events.
@@ -301,6 +314,22 @@ attribute table limit).
 
 ## Done
 
+- P3.5 — Deviation D5 closed (commit `3cdac11`): `_handle_sensor_data` in
+  `library/skywriter/__init__.py` now dispatches the registered `garbage()`
+  callback (as `callable(_on_garbage)`, mirroring the flick dispatch) when
+  the sensor reports gesture wire code 1. Previously the branch matched
+  code 1 in the `gestures` list and then dropped it — the only dispatched
+  kind was `flick` — so a handler registered via the `@skywriter.garbage()`
+  decorator could never run. Verified end-to-end by feeding the recorded
+  frame `F06_garbage_gesture.hex` through the real `_handle_sensor_data`
+  with a registered capture callback (it fired exactly once). Manifest:
+  the `garbage_gesture` scenario dropped its `omit_pending D5` annotation,
+  so its `{"event": "gesture", "code": 1}` expectation is now hard-asserted
+  on Python with no tolerance left (class/edge remain gated by D7).
+  Ledger: D5 row removed from `specs/README.md`. `bash run_tests.sh`
+  green 4/4; 22 pytest tests. Discovered while closing D5: circle gestures
+  (codes 6/7) are silently discarded the same way and the `_on_circle`
+  registry is dead code — recorded as deviation D10 + work item P3.5b.
 - P3.4 — Deviation D3 closed for the **Python** driver (commit `885475f`):
   `library/skywriter/__init__.py` now computes the AirWheel rotation delta
   as a signed 8-bit difference,
