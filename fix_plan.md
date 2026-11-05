@@ -172,6 +172,12 @@ docker run -it --rm \
    touch/AirWheel/gesture scenarios attributed to P3.13–P3.15 by a lint.
    Update (2026-11-05, P3.13 commit `3c3e1de`): the touch semantics are
    live — see the P3.13 Done entry; 54 pytest tests; `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.14 commit `95ad4c2`): the §5 AirWheel semantics
+   are live in the mapping engine — 11.25°-quantized scroll notches, sign,
+   fractional accumulator, immediate un-coalesced emission, lift-off
+   reset; the three AirWheel scenarios are hard-asserted end-to-end
+   (AC-MAP-04 + the touch+position+airwheel row of AC-MAP-06); see the
+   P3.14 Done entry. 61 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -257,9 +263,7 @@ library both use). Python driver fixes go to `library/`.
 
 - [x] P3.12 → done, moved to the Done section below.
 - [x] P3.13 → done, moved to the Done section below.
-- [ ] P3.14 Airwheel semantics per §5: 11.25°-quantized notches, sign,
-      accumulator. Target `AC-MAP-04` wrap survivor (fixtures F11–F15).
-      (Baseline rule settled by P3.14a — see the Done section.)
+- [x] P3.14 → done, moved to the Done section below.
 - [ ] P3.15 Full §6 default mapping table as the single implementation table
       ("the table IS the implementation"), incl. garbage → nothing, reserved
       doubletap east/west → nothing, and media/consumer rows. Target
@@ -387,6 +391,53 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.14 — the §5 AirWheel semantics are live in the mapping engine (commit
+  `95ad4c2`). The rotation (scroll) stream of `specs/hid_mapping.md` §5
+  (AC-MAP-04, the touch+position+airwheel row of AC-MAP-06) lands in
+  `pico-arduino/SkywriterHID/src/SkywriterHIDMapper.{h,cpp}`:
+  - `onAirwheel(degrees, now)` converts the frame's signed rotation delta
+    to wheel notches at the new named constant `AIRWHEEL_NOTCH_DEGREES =
+    11.25` (one sensor counter step = 11.25° = one wheel notch — the
+    counter's own 32-steps-per-revolution quantization, Interface.pdf
+    Table 4-10; deliberately a documented datasheet constant, NOT one of
+    the §7 tunables: it is the sensor's resolution, not a feel parameter).
+    Positive (clockwise) = scroll up; `AIRWHEEL_INVERT` flips the sign
+    when configured. `AIRWHEEL_ENABLED == false` keeps the wheel rows
+    dormant (the sensor then reports circle gestures instead — the
+    hardware constraint of §6's note).
+  - Fractional notches accumulate in new state `wheel_acc_` (float); the
+    whole part is emitted **immediately** via `sink_.mouseWheel()` —
+    deliberately NOT routed through `attempt_report()`, because §5 makes
+    scroll latency-sensitive and only move reports coalesce. Truncation
+    toward zero keeps the remainder's sign in the accumulator (same
+    never-lose-movement principle as the pointer's pending deltas; the §5
+    "two 45° deltas = 8 notches total" example is exact here). Emission is
+    clamped into the sink's `int8_t` wheel field (realistic per-event
+    deltas are ≤ 32 steps; anything absurd drains on later events, lost
+    nothing).
+  - Lift-off reset (§5 "Accumulator resets on lift-off"): `tick()`'s
+    existing lift-off transition (`have_prev_` true→false) now also clears
+    `wheel_acc_` — mirroring the release of held buttons in the same
+    branch.
+  - Pinned three ways: (a) the corpus scenarios
+    `airwheel_quarter_turn_cw` (two +90° events → two +8-notch wheel
+    reports), `airwheel_wrap` (counter wrap → +4 notches, the D3-closed
+    decoder behaviour flowing through) and
+    `touch_with_position_and_airwheel` (button down + wheel 8 + position
+    baseline from ONE frame) are now hard-asserted end-to-end through the
+    real driver → real engine chain (armed in `MAPPING_ENGINE_ARMED`);
+    (b) 7 new direct mapper unit tests in `tests/test_mapper_unit.py`
+    (via a new `AIRWHEEL <degrees> <ms>` instruction in
+    `tests/cpp/host_mapper_unit_main.cpp`) pin half-notch accumulation,
+    remainder survival across events, un-coalesced emission inside one
+    move-report interval, and the lift-off reset (with the contrast pair
+    proving the reset's effect); (c) an `arduino-cli` RP2040 Pico W smoke
+    sketch including the mapper compiles clean (throwaway, deleted).
+  - `tests/README.md`, `tests/hid_grammar.py` and the
+    `MAPPING_ENGINE_ARMED`/`MAPPING_ENGINE_PENDING` docstrings updated
+    (P3.15 keeps the remaining five gesture scenarios).
+  Verified: `bash run_tests.sh` green 4/4; 61 pytest tests (54 + 7).
 
 - P3.13 — the §4 touch semantics are live in the mapping engine and the
   §6 button rows are implemented (commit `3c3e1de`). The engine now turns
