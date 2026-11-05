@@ -103,9 +103,9 @@ def test_fresh_decoder_state_per_replay(cpp_adapter, python_adapter):
 def test_simulated_time_gap_between_frames(python_adapter):
     # The release-by-silence scenario carries time_gap_ms=250. The clock ends
     # up advanced by gap x frame_count: one advance between each pair of
-    # frames, one more so the post-scenario finish() check (once P3.13's
-    # mapping adapter exists) can evaluate "release 250 ms after the last
-    # touch frame" — all simulated, zero wall time.
+    # frames, one more so the post-scenario finish() check (the clock-aware
+    # mapping adapter exists since P3.13) can evaluate "release by silence"
+    # — all simulated, zero wall time.
     scenario = fixtures.scenario(fixtures.load_manifest(),
                                  'touch_press_and_release')
     result = runner.replay(scenario, python_adapter)

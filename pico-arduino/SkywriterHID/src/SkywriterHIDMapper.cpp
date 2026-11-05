@@ -21,6 +21,31 @@ inline long round_half_away(float v) {
   return v >= 0.0f ? static_cast<long>(v + 0.5f)
                    : static_cast<long>(v - 0.5f);
 }
+
+// §6 default mapping profile — the BUTTON rows (fix item P3.13):
+//   touch(center) hold → left; tap(center) → left; doubletap(center) → left
+//   double-click; tap(east) → right; tap(west) → middle.
+// Deliberately absent here, owned by other fix items:
+//   - touch(north/south) hold → auto-scroll (needs the §5 wheel; P3.15),
+//   - tap(north/south) → keyboard Page Up/Down (P3.15),
+//   - doubletap(east/west) → nothing, reserved by §6 (documented with P3.15).
+// -1 = no button row for this zone/kind.
+int button_for(SensorZone zone, TouchKind kind) {
+  switch (kind) {
+    case TOUCH_HOLD:
+      return zone == ZONE_CENTER ? static_cast<int>(HID_BUTTON_LEFT) : -1;
+    case TOUCH_TAP:
+      switch (zone) {
+        case ZONE_CENTER: return static_cast<int>(HID_BUTTON_LEFT);
+        case ZONE_EAST:   return static_cast<int>(HID_BUTTON_RIGHT);
+        case ZONE_WEST:   return static_cast<int>(HID_BUTTON_MIDDLE);
+        default:          return -1;
+      }
+    case TOUCH_DOUBLETAP:
+      return zone == ZONE_CENTER ? static_cast<int>(HID_BUTTON_LEFT) : -1;
+  }
+  return -1;
+}
 }  // namespace
 
 void SkywriterHIDMapper::onPosition(uint16_t x, uint16_t y, uint16_t /*z*/,
@@ -57,11 +82,40 @@ void SkywriterHIDMapper::onPosition(uint16_t x, uint16_t y, uint16_t /*z*/,
   attempt_report(now_ms, false);
 }
 
-void SkywriterHIDMapper::onTouch(SensorZone /*zone*/, TouchKind /*kind*/,
-                                 unsigned long /*now_ms*/) {
-  // §4 semantics (press-once/repeat-inert, release after TOUCH_RELEASE_MS,
-  // tap/doubletap clicks) land with fix item P3.13 — event accepted, no
-  // output yet. §6's button/auto-scroll rows map from the same input.
+void SkywriterHIDMapper::onTouch(SensorZone zone, TouchKind kind,
+                                 unsigned long now_ms) {
+  const int button = button_for(zone, kind);
+
+  if (kind == TOUCH_HOLD) {
+    // §2: the touch bit repeats in every frame while the finger is on the
+    // electrode. Track the recency for release-by-silence whatever the §6
+    // mapping says (every zone, pressed or not).
+    last_touch_ms_[zone] = now_ms;
+    if (button < 0) {
+      // No §6 holdbutton row for this zone: nothing to press (auto-scroll
+      // lands with P3.15); its recency is still tracked above.
+      return;
+    }
+    if (held_[zone]) {
+      return;  // §4: press-once — repeats do not re-trigger the press
+    }
+    // §6: touch(center) hold → left button down (multi-button: each zone
+    // has fully independent press state, §4).
+    held_[zone] = true;
+    sink_.mouseButton(static_cast<uint8_t>(button), true);
+    return;
+  }
+
+  // §4: tap(zone) → press + release of TAP_CLICK_MS; doubletap(zone) → two
+  // of those clicks. The click is driven as one completed sink action, so
+  // a tap/doubletap never leaves a button held and its press/release never
+  // straddle a coalesced period. Zones without a §6 row (doubletap
+  // east/west reserved → nothing; tap(north/south) keyboard rows, P3.15)
+  // fall through silently.
+  if (button >= 0) {
+    sink_.mouseClick(static_cast<uint8_t>(button),
+                     kind == TOUCH_DOUBLETAP ? 2 : 1);
+  }
 }
 
 void SkywriterHIDMapper::onGesture(uint8_t /*code*/, unsigned long /*now_ms*/) {
@@ -80,13 +134,39 @@ void SkywriterHIDMapper::tick(unsigned long now_ms) {
   // §3 rule 5: lift-off gating. PositionValid is implicit in the event
   // stream (the driver only reports valid positions), so "invalid for more
   // than LIFT_OFF_MS" reads as a silence: no valid position within the
-  // window pauses tracking. The next valid position re-baselines (rule 4),
-  // and lift-off also releases held buttons (§4) — that half lands with
-  // P3.13. AC-MAP-07's pointer-baseline reset is this.
+  // window pauses tracking. The next valid position re-baselines (rule 4).
+  // AC-MAP-07's pointer-baseline reset is this.
   if (have_prev_ && now_ms - last_position_ms_ > LIFT_OFF_MS) {
     have_prev_ = false;
+    // §4 explicit-release trigger: the hand left the field, so every held
+    // button goes up immediately (whatever the touch silence says).
+    release_all_buttons();
+  }
+  // §4 release is inferred: no touch frame for TOUCH_RELEASE_MS releases
+  // the zone's held button. Each zone is independent, and an arriving
+  // touch frame keeps refreshing its recency (onTouch) without pressing.
+  for (int zone = 0; zone < kZoneCount; ++zone) {
+    if (held_[zone] && now_ms - last_touch_ms_[zone] > TOUCH_RELEASE_MS) {
+      held_[zone] = false;
+      sink_.mouseButton(
+          static_cast<uint8_t>(
+              button_for(static_cast<SensorZone>(zone), TOUCH_HOLD)),
+          false);
+    }
   }
   attempt_report(now_ms, false);
+}
+
+void SkywriterHIDMapper::release_all_buttons() {
+  for (int zone = 0; zone < kZoneCount; ++zone) {
+    if (held_[zone]) {
+      held_[zone] = false;
+      sink_.mouseButton(
+          static_cast<uint8_t>(
+              button_for(static_cast<SensorZone>(zone), TOUCH_HOLD)),
+          false);
+    }
+  }
 }
 
 void SkywriterHIDMapper::finish(unsigned long now_ms) {

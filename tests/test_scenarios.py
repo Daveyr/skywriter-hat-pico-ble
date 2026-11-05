@@ -16,7 +16,8 @@ adapter) and checked against its machine-checkable expectations:
   well-formedness is validated for every scenario, and the scenarios in
   ``MAPPING_ENGINE_ARMED`` are additionally replay-asserted against the
   mapping engine end-to-end (P3.12 armed the pointer-model and
-  always-silent scenarios; P3.13–P3.15 open the rest — see
+  always-silent scenarios, P3.13 the touch scenarios; P3.14–P3.15 open
+  the rest — see
   ``MAPPING_ENGINE_PENDING`` and the arm-coverage test below),
 - cross-driver parity — where both decoders emit an event, the canonical
   streams must agree (AC-MAP-09), except for event omissions attributable to
@@ -43,8 +44,9 @@ DRIVERS = ('python', 'cpp')
 # mapping adapter (the whole firmware signal chain: driver → canonical
 # events → mapper, one host binary). A scenario lands in
 # MAPPING_ENGINE_ARMED once the engine implements the behaviour its
-# records claim — the pointer-model scenarios arm here; the touch, AirWheel
-# and gesture scenarios open with P3.13–P3.15 (see MAPPING_ENGINE_PENDING).
+# records claim — the pointer-model scenarios arm here (P3.12), the touch
+# scenarios since P3.13; the AirWheel and gesture scenarios open with
+# P3.14–P3.15 (see MAPPING_ENGINE_PENDING).
 MAPPING_ENGINE_ARMED = frozenset({
     # Pointer model (§3, P3.12): baseline-only first position, jump
     # rejection, real movement with GAIN/sign, lift-off re-baseline.
@@ -52,6 +54,14 @@ MAPPING_ENGINE_ARMED = frozenset({
     'position_jump_rebaseline',
     'pointer_move',
     'pointer_lift_off_rebaseline',
+    # Touch semantics (§4 + §6 button rows, P3.13): press-once/repeat-inert
+    # holds (release-by-silence covered below), tap/doubletap clicks,
+    # multi-zone frames. Sub-250 ms repeat timing is pinned by the direct
+    # mapper unit tests (tests/test_mapper_unit.py) — see the module docstring.
+    'touch_press_and_release',
+    'touch_two_zones',
+    'tap_center',
+    'doubletap_center',
     # Events the §6 table (once filled) must map to nothing: garbage
     # gesture rows and the control frames. The mapper accepts these kinds
     # of events today and emits nothing yet — the assertions stop any row
@@ -65,16 +75,12 @@ MAPPING_ENGINE_ARMED = frozenset({
 # Scenario name → fix item(s) whose engine rows open its HID replay
 # assertion. Linted to cover every manifest scenario not in ARMED.
 MAPPING_ENGINE_PENDING = {
-    # Touch semantics (§4, P3.13): presses, releases, taps/doubletaps.
-    'touch_press_and_release': ('P3.13',),
-    'touch_two_zones': ('P3.13',),
-    'tap_center': ('P3.13',),
-    'doubletap_center': ('P3.13',),
     # AirWheel semantics (§5, P3.14): notches, sign, wrap.
     'airwheel_quarter_turn_cw': ('P3.14',),
     'airwheel_wrap': ('P3.14',),
-    # Needs both: the touch button half (P3.13) plus the wheel half (P3.14).
-    'touch_with_position_and_airwheel': ('P3.13', 'P3.14'),
+    # Needs both: the touch button half (P3.13, landed 2026-11-05) plus the
+    # wheel half (P3.14).
+    'touch_with_position_and_airwheel': ('P3.14',),
     # Gesture → media/consumer rows (§6, P3.15).
     'flick_west_east': ('P3.15',),
     'flick_east_west': ('P3.15',),

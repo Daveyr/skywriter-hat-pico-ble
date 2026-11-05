@@ -20,6 +20,7 @@ by `bash run_tests.sh` (`python3 -m pytest -q tests/`).
 | `hid_grammar.py` | The structured HID outcome-record grammar (P3.2): mouse/keyboard/consumer report records per `specs/hid_mapping.md` §3–§6, validated for every scenario. |
 | `test_harness.py` | 11 meta-tests: manifest/frame integrity, every scenario replays on both adapters, fresh-state identity on reruns, simulated-gap accounting, VirtualClock non-sleeping, plus today-true plumbing pins (F01 position values on both drivers, flick W→E dispatch, tap dispatch). |
 | `test_scenarios.py` | Spec assertions per scenario (P3.2): manifest lint (structured schema, pending annotations resolve to open spec-ledger rows), canonical expectation compare per driver, deviation-realization checks, HID outcome well-formedness, and cross-driver parity (AC-MAP-09). |
+| `test_mapper_unit.py` | Direct mapper unit tests (P3.13): the §4 touch semantics the corpus cannot carry (repeat-inert presses, exact release/lift-off tick timing, tap/doubletap clicks, §6 button rows) asserted against `SkywriterHIDMapper` through a dedicated host binary (`tests/cpp/host_mapper_unit_main.cpp`). |
 
 ## Canonical grammar (P3.2)
 
@@ -87,9 +88,15 @@ Page Up/Down, consumer media usages). Well-formedness is validated for every
 scenario; the scenarios in `MAPPING_ENGINE_ARMED` (`tests/test_scenarios.py`)
 are additionally **replay-asserted end-to-end** against `SkywriterHIDMapper`
 through the mapping adapter — the pointer-model and always-silent scenarios
-armed with P3.12, and everything not yet armed is attributed to its opening
-fix item in `MAPPING_ENGINE_PENDING` (linted so every new scenario must be
-classified). P3.13–P3.15 open the remaining rows as they land.
+armed with P3.12, the touch scenarios with P3.13, and everything not yet
+armed is attributed to its opening fix item in `MAPPING_ENGINE_PENDING`
+(linted so every new scenario must be classified). P3.14–P3.15 open the
+remaining rows as they land. Behaviours the corpus cannot carry because of
+the Python driver's by-design touch-repeat limiting (default 4 Hz — a repeat
+touch frame under 250 ms would make the decoders' canonical streams diverge
+undecoratably), such as repeat-inert presses and exact release/lift-off tick
+timing, are pinned by the direct mapper unit tests in `test_mapper_unit.py`
+against the same engine source the firmware links.
 
 ## Scope note for the loop
 

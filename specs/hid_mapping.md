@@ -184,8 +184,9 @@ The mapping table of §6 **is** the implementation: one static table mapping
 `REPORT_INTERVAL_MS`, `LIFT_OFF_MS`) as named constants in the same place. No
 second copy of the mapping may exist (any Python port consumes this same
 document). The single implementation is the `SkywriterHID` mapping engine in
-`pico-arduino/SkywriterHID/src/` (pointer model live since P3.12; §4 touch,
-§5 AirWheel and the remaining §6 rows land with P3.13–P3.15). A future config
+`pico-arduino/SkywriterHID/src/` (pointer model live since P3.12; the §4
+touch semantics and the §6 button rows since P3.13; §5 AirWheel and the
+remaining §6 rows land with P3.14–P3.15). A future config
 channel (e.g. BLE characteristic) may expose the tunables; not required by
 this spec.
 

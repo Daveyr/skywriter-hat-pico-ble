@@ -7,13 +7,15 @@
 // supplies (in the firmware that sink reports to the Bluetooth HID stack; in
 // the fixture-replay tests it prints the `tests/hid_grammar.py` records).
 //
-// The pointer model (§3) is fully implemented here — normalization, GAIN,
-// sign, jump rejection + re-baseline, lift-off gating and report cadence
-// (AC-MAP-01). Touch semantics (§4), AirWheel semantics (§5) and the
-// remaining §6 mapping-table rows land with fix items P3.13–P3.15: the
-// mapper already accepts those kinds of events and maps them to nothing
-// until then (an accepted-and-dropped event, deliberately silent — not a
-// wrong output).
+// The pointer model (§3, AC-MAP-01) and the touch semantics (§4, AC-MAP-02 /
+// AC-MAP-03 / the release half of AC-MAP-07) are fully implemented here —
+// normalization, GAIN, sign, jump rejection + re-baseline, lift-off gating,
+// report cadence, press-once/repeat-inert holds, release-by-silence,
+// tap/doubletap clicks and the §6 button rows. AirWheel semantics (§5) and
+// the remaining §6 mapping-table rows (media/consumer, keyboard, hold
+// auto-scroll) land with fix items P3.14–P3.15: the mapper already accepts
+// those kinds of events and maps them to nothing until then (an
+// accepted-and-dropped event, deliberately silent — not a wrong output).
 
 #ifndef SKYWRITER_HID_MAPPER_H
 #define SKYWRITER_HID_MAPPER_H
@@ -109,8 +111,8 @@ class SkywriterHIDMapper {
   // coalescing never drops movement.
   static const unsigned long REPORT_INTERVAL_MS;
   // §4 touch release: no touch frame for this long releases the held button
-  // (initial 200 ms = 40 missed 5 ms frames). Constants live here with the
-  // rest of the tunables; the semantics themselves land with P3.13.
+  // (initial 200 ms = 40 missed 5 ms frames). The time is compared with `>`
+  // (strictly), so a frame at exactly the threshold still counts as held.
   static const unsigned long TOUCH_RELEASE_MS;
   // §4 click length for tap/doubletap clicks (initial 50 ms).
   static const unsigned long TAP_CLICK_MS;
@@ -128,8 +130,10 @@ class SkywriterHIDMapper {
   // a future height-sensitivity feature).
   void onPosition(uint16_t x, uint16_t y, uint16_t z, unsigned long now_ms);
 
-  // touch/tap/doubletap(zone) — §4 semantics land with P3.13; accepted and
-  // mapped to nothing until then.
+  // touch/tap/doubletap(zone) — §4 semantics (press-once/repeat-inert,
+  // release-by-silence via tick(), tap/doubletap clicks) plus the §6 button
+  // rows: touch(center) hold → left, tap(center) → left, doubletap(center)
+  // → left ×2, tap(east) → right, tap(west) → middle.
   void onTouch(SensorZone zone, TouchKind kind, unsigned long now_ms);
 
   // gesture(code, class, edge) — only the code is needed by §6. Rows land
@@ -152,6 +156,10 @@ class SkywriterHIDMapper {
 
  private:
   void attempt_report(unsigned long now_ms, bool force);
+  // §4 explicit-release trigger (lift-off; a future disconnect path would
+  // call the same via a public wrapper when the firmware needs it, P3.17):
+  // every held button goes up immediately, in zone order.
+  void release_all_buttons();
 
   HIDMapperSink& sink_;
 
@@ -163,6 +171,14 @@ class SkywriterHIDMapper {
   float pending_dx_ = 0.0f;          // accumulated, not-yet-reported movement
   float pending_dy_ = 0.0f;          // (float: fractional GAIN carry-over)
   unsigned long last_report_ms_ = 0;     // when the last move report went out
+
+  // Touch state (§4): the sensor has no release event, so each zone tracks
+  // its own press state. held_ is only ever set for zones that have a §6
+  // hold button (currently center); last_touch_ms_ is tracked for every
+  // zone so repeats refresh the recency whatever the mapping says.
+  static const int kZoneCount = 5;   // south, west, north, east, center
+  bool held_[kZoneCount] = {};       // zone's button is currently down
+  unsigned long last_touch_ms_[kZoneCount] = {};  // last touch frame seen
 };
 
 #endif  // SKYWRITER_HID_MAPPER_H
