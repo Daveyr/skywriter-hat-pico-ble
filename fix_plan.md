@@ -188,6 +188,20 @@ docker run -it --rm \
    replay-asserted on the engine (MAPPING_ENGINE_PENDING empty), the five
    gesture scenarios armed (AC-MAP-05 closed offline). 69 pytest tests;
    `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.16 commit `f5c8316`): the first firmware sketch
+   exists — `pico-arduino/SkywriterController/` brings up the sensor stack
+   (the four Set_Runtime_Parameter configuration commands sent by the
+   firmware itself, 15 payload bytes each) and starts the composite BLE HID
+   device (one `begin()`, device name `Skywriter HID`, HID-class
+   appearance; AC-BLE-01/02 software side, static-pinned by 13 new
+   source-level tests in `tests/test_firmware_sketch.py`) — the RF checks
+   stay with Phase 4. New build truth recorded: BLE HID sketches need the
+   arduino-pico core's `ipbtstack=ipv4btcble` ("IPv4 + Bluetooth") build
+   option or the BTstack (Bluetooth) libraries are not linked at all —
+   `flash.sh` and `run_tests.sh` now pass that FQBN variant and AGENTS.md's
+   Environment section documents it; the Dockerfile additionally symlinks
+   the `SkywriterHID` engine library into the Arduino user directory.
+   82 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -280,25 +294,17 @@ library both use). Python driver fixes go to `library/`.
 ### 3e — BLE HID firmware (`pico-arduino/`) — software written here, verified
 in Phase 4 on hardware
 
-- [ ] P3.16 Firmware sketch: sensor stack + composite Bluetooth LE HID device
-      bring-up per `specs/ble_hid.md` §3–4 — link `MouseBLE` + `KeyboardBLE`
-      and call exactly **one** `begin()`, device name `Skywriter HID`,
-      HID-class appearance. Target `AC-BLE-01`, `AC-BLE-02` (composite
-      Report Map). Compiles in-container; RF behaviour verified in Phase 4.
-      (Sensor bring-up note from P3.8: the firmware's sensor stack must send
-      the four Set_Runtime_Parameter (`0xA2`) configuration commands itself —
-      the pristine stock `arduino/Skywriter` library does not configure the
-      sensor. Each command is the `0x10` control-setup byte on the I2C
-      (Inter-Integrated Circuit) write followed by **exactly 15 payload
-      bytes** (the same payload the Python `setup()` writes), never a
-      16-step copy loop over a 15-element array — that off-by-one was the
-      removed deviation D2.)
+- [x] P3.16 → done, moved to the Done section below.
 - [ ] P3.17 Firmware sketch: pairing, battery, and lifecycle wiring per
       `specs/ble_hid.md` §5, §6, §8 — battery reported 100 % at connect,
       drop reports while unconnected, neutral resync report on (re)connect,
       back to advertising on link loss. Target `AC-BLE-03`, `AC-BLE-07`
-      (verified in Phase 4). Note from P3.13: the §4 "disconnect releases
-      all held buttons" rule needs a mapper API the engine deliberately
+      (verified in Phase 4).
+      API note from P3.16: call `PicoBluetoothBLEHID.setBattery()` (directly,
+      e.g. from the opened callback), **not** `MouseBLE.setBattery()` — the
+      latter gates on `MouseBLE_`'s own `_running`, which the core never sets
+      (not even in its own `begin()`), so it silently does nothing.
+      Note from P3.13: the §4 "disconnect releases all held buttons" rule needs a mapper API the engine deliberately
       does not have yet (its private `release_all_buttons()` fires only on
       lift-off; `finish()` is a movement flush and does not touch buttons,
       by design) — add a public release-all entry point to
@@ -386,6 +392,90 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.16 — the FIRST Pico W firmware sketch exists and compiles for the
+  board (commit `f5c8316`): `pico-arduino/SkywriterController/
+  SkywriterController.ino` combines the sensor stack bring-up with the
+  composite BLE HID device of `specs/ble_hid.md` §3–§4 (targets
+  AC-BLE-01 / AC-BLE-02, software side; the RF checks stay with Phase 4).
+  In plain language: the sketch is the missing wire between the gesture
+  sensor and the outside world — it configures the sensor, reads its
+  events, translates them with the existing mapping engine, and speaks
+  the standard wireless-peripheral language so hosts pair with it like a
+  mouse. Parts:
+  - **Sensor bring-up lives in the firmware** (the P3.8 note): the stock
+    `Skywriter.begin()` pulses only the reset line, so the sketch sends
+    the four Set_Runtime_Parameter (0xA2) configuration commands itself —
+    each the 0x10 control write followed by EXACTLY 15 payload bytes
+    (`SW_SET_RUNTIME_PAYLOAD_SIZE`-bounded copy loop, never the removed
+    deviation D2's 16-step over-run). Every command waits for the
+    sensor's System_Status acknowledge (0x15 frame carrying the MsgID —
+    the Python `get_status()` pattern: 10 tries, 1 ms apart, TS-low read
+    of the 26-byte header); a failure prints `SKYSTATE
+    sensor_config_failed cmd_index=N` and denies boot (the Python driver
+    raises — a headless controller refuses instead), success prints
+    `SKYSTATE sensor_ok`.
+  - **Composite device with exactly one begin()** (AC-BLE-02): both
+    `MouseBLE` and `KeyboardBLE` libraries are linked and used, so
+    `__SetupHIDreportmap` merges pointer + keyboard + consumer-control
+    descriptors into ONE HID Report Map, but only `KeyboardBLE.begin()`
+    runs (each library's `begin()` would call `startHID` twice). The
+    skipped mouse `begin()`'s only needed side effect — the public
+    `HID_Mouse::_running` enable bit, without which every press/release
+    is silently ignored — is set directly via a base up-cast, with the
+    double-start reasoning in a comment; `tests/test_firmware_sketch.py`
+    pins that both the call quantity and the comment survive.
+  - **Identity / battery** (AC-BLE-01, §8): advertisement and HID
+    attribute name both `Skywriter HID` (`SKYWRITER_DEVICE_NAME` fills
+    both `begin()` slots); appearance comes from `__BLEGetAppearance()`
+    inside that begin (printed onto the console as `SKYSTATE
+    hid_started name=... appearance=0x...`); the Battery Service starts
+    at 100 % through `startHID`'s default (§8's connect-time refresh is
+    P3.17).
+  - **Firmware house-style warning for the next sketch**: the Arduino
+    builder hoists sketch-level function prototypes ABOVE the type
+    definitions in the generated file, so a parameter typed with a
+    sketch-local enum/struct fails to compile — every sketch-level
+    signature stays in primitive types (documented next to the pulse
+    queue).
+  - **Event path wired end-to-end**: all four sensor streams (position,
+    touch/tap/doubletap, gesture, AirWheel) route into
+    `SkywriterHIDMapper`, whose `tick()` runs every loop iteration from
+    `millis()` (the engine accepts caller-supplied time only). Touch
+    codes 0–14 map to zones via one table (families of five ordered
+    center/east/north/west/south; family 0 doubletap, 1 tap, 2 hold).
+    The mapper's HID calls go through the sketch's sink: pointer moves
+    clamp into the int8 BLE report field with a retained remainder
+    (movement never dropped), wheel deltas emit immediately, and
+    clicks/keys/media go through a 16-slot timed press/release pulse
+    queue so no transition is ever coalesced away (§7/AC-BLE-04
+    semantics).
+  - **Build-truth discovery** (recorded in AGENTS.md Environment +
+    `flash.sh` + `run_tests.sh`): the BLE HID sketches DO NOT BUILD with
+    the plain FQBN — the arduino-pico core links its BTstack (Bluetooth)
+    libraries only under the "IPv4 + Bluetooth" build menu
+    (`ipbtstack=ipv4btcble`); a plain build fails the
+    `_needsbt.h` static assert ("This library needs Bluetooth enabled").
+    Both build entry points now compile with
+    `rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble` and `arduino-cli
+    compile` lines in AGENTS.md were updated too.
+  - **Toolchain wiring**: the Dockerfile now symlinks
+    `pico-arduino/SkywriterHID` into the Arduino user library directory
+    (the symlink is live in the `skywriter-arduino` volume) so the
+    sketch resolves the mapping-engine library the same way it already
+    resolved `Skywriter`. Sketch compiles at 22 % flash / 34 % RAM.
+  - **New tests**: `tests/test_firmware_sketch.py` (13 static pins —
+    device name, single begin, both libraries linked, battery comment,
+    the four byte-exact runtime payloads, the 15-byte copy bound,
+    acknowledgment handling, all-CODE touch mapping table, mapper
+    wiring, serial state lines) + a `tests/README.md` parts-table row.
+    After Phase-4 hardware contact, RF truth belongs to the probes
+    (P4.2/P4.3); these pins only fail fast on software regressions.
+  - **API note recorded on P3.17**: `MouseBLE.setBattery()` is unusable
+    (`MouseBLE_::_running` is never set by the core, not even by its own
+    `begin()`) — P3.17's battery-at-connect must call
+    `PicoBluetoothBLEHID.setBattery()` directly.
+  Verified: `bash run_tests.sh` green 4/4; 82 pytest tests (69 + 13).
 
 - P3.15b — the fixture corpus now covers every remaining §6 row the ledger
   item listed (commit `86b19fd`). The pointer-movement half of the item
