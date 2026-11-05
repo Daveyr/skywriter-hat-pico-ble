@@ -12,6 +12,9 @@ const unsigned long SkywriterHIDMapper::TOUCH_RELEASE_MS = 200;
 const unsigned long SkywriterHIDMapper::TAP_CLICK_MS = 50;
 const bool SkywriterHIDMapper::AIRWHEEL_INVERT = false;
 const bool SkywriterHIDMapper::AIRWHEEL_ENABLED = true;
+// §5: one 11.25° sensor step = one wheel notch (datasheet constant, see
+// the header note — not a tunable feel parameter).
+const float SkywriterHIDMapper::AIRWHEEL_NOTCH_DEGREES = 11.25f;
 
 namespace {
 // Deterministic round-half-away-from-zero: report deltas are whole cursor
@@ -124,10 +127,45 @@ void SkywriterHIDMapper::onGesture(uint8_t /*code*/, unsigned long /*now_ms*/) {
   // → nothing rows come with it.
 }
 
-void SkywriterHIDMapper::onAirwheel(float /*degrees*/,
-                                    unsigned long /*now_ms*/) {
-  // §5 semantics (one 11.25° step = one wheel notch, sign, accumulator,
-  // lift-off reset) land with fix item P3.14.
+void SkywriterHIDMapper::onAirwheel(float degrees, unsigned long /*now_ms*/) {
+  // §5 AirWheel semantics (fix item P3.14, target AC-MAP-04). The time
+  // argument is unused: wheel deltas are emitted immediately, un-coalesced
+  // (scroll feel is latency-sensitive), so no timer matters here — an
+  // event's notches go straight to the sink.
+  if (!AIRWHEEL_ENABLED) {
+    // §6 note: with AirWheel disabled the sensor produces circle gestures
+    // instead of counter data (hardware constraint, Interface.pdf
+    // Table 4-10); the wheel rows are dormant by configuration.
+    return;
+  }
+
+  // §5: whole step quantization. One sensor step (AIRWHEEL_NOTCH_DEGREES
+  // of rotation, the counter's own resolution) = one wheel notch; positive
+  // (clockwise) degrees scroll up. AIRWHEEL_INVERT is the configuration
+  // override for the direction convention.
+  float notches_f = degrees / AIRWHEEL_NOTCH_DEGREES;
+  if (AIRWHEEL_INVERT) {
+    notches_f = -notches_f;
+  }
+
+  // §5: fractional steps accumulate — fractional remainder stays in
+  // wheel_acc_, the whole part goes out now. Truncation toward zero keeps
+  // the remainder's sign with the accumulator (same never-lost principle
+  // as the pointer's pending deltas).
+  wheel_acc_ += notches_f;
+  long notches = static_cast<long>(wheel_acc_);
+  if (notches == 0) {
+    return;  // less than one full notch: nothing a wheel report could say
+  }
+  wheel_acc_ -= static_cast<float>(notches);
+
+  // The sink carries int8_t (the HID wheel field's own signed range —
+  // realistic per-event deltas are ≤ 32 steps of the counter). Anything
+  // beyond that range keeps accumulating and drains on later events, so
+  // even absurd input loses nothing.
+  if (notches > 127) notches = 127;
+  if (notches < -128) notches = -128;
+  sink_.mouseWheel(static_cast<int8_t>(notches));
 }
 
 void SkywriterHIDMapper::tick(unsigned long now_ms) {
@@ -138,6 +176,10 @@ void SkywriterHIDMapper::tick(unsigned long now_ms) {
   // AC-MAP-07's pointer-baseline reset is this.
   if (have_prev_ && now_ms - last_position_ms_ > LIFT_OFF_MS) {
     have_prev_ = false;
+    // §5: the AirWheel accumulator resets on lift-off — a fractional
+    // notch pending from the moment the hand left the field must not leak
+    // into the next rotation gesture.
+    wheel_acc_ = 0.0f;
     // §4 explicit-release trigger: the hand left the field, so every held
     // button goes up immediately (whatever the touch silence says).
     release_all_buttons();

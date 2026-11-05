@@ -13,6 +13,7 @@
 //         zone: south|west|north|east|center
 //         kind: hold|tap|doubletap
 //     POSITION <x> <y> <ms>      mapper.onPosition(x, y, z=0, ms)
+//     AIRWHEEL <degrees> <ms>    mapper.onAirwheel(degrees, ms)
 //     TICK <ms>                  mapper.tick(ms)
 //     FIN <ms>                   mapper.finish(ms)
 //
@@ -107,6 +108,13 @@ int main() {
       }
       mapper.onPosition(static_cast<uint16_t>(x), static_cast<uint16_t>(y),
                         0, t);
+    } else if (strcmp(token, "AIRWHEEL") == 0) {
+      float degrees = 0.0f;
+      if (sscanf(line, "%*15s %f %lu", &degrees, &t) != 2) {
+        fprintf(stderr, "bad AIRWHEEL line: %s", line);
+        return 2;
+      }
+      mapper.onAirwheel(degrees, t);
     } else if (strcmp(token, "TICK") == 0) {
       if (sscanf(line, "%*15s %lu", &t) != 1) {
         fprintf(stderr, "bad TICK line: %s", line);

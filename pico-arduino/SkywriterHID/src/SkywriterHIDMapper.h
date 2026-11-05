@@ -7,14 +7,16 @@
 // supplies (in the firmware that sink reports to the Bluetooth HID stack; in
 // the fixture-replay tests it prints the `tests/hid_grammar.py` records).
 //
-// The pointer model (§3, AC-MAP-01) and the touch semantics (§4, AC-MAP-02 /
-// AC-MAP-03 / the release half of AC-MAP-07) are fully implemented here —
-// normalization, GAIN, sign, jump rejection + re-baseline, lift-off gating,
-// report cadence, press-once/repeat-inert holds, release-by-silence,
-// tap/doubletap clicks and the §6 button rows. AirWheel semantics (§5) and
-// the remaining §6 mapping-table rows (media/consumer, keyboard, hold
-// auto-scroll) land with fix items P3.14–P3.15: the mapper already accepts
-// those kinds of events and maps them to nothing until then (an
+// The pointer model (§3, AC-MAP-01), the touch semantics (§4, AC-MAP-02 /
+// AC-MAP-03 / the release half of AC-MAP-07) and the AirWheel semantics
+// (§5, AC-MAP-04) are fully implemented here — normalization, GAIN, sign,
+// jump rejection + re-baseline, lift-off gating, report cadence,
+// press-once/repeat-inert holds, release-by-silence, tap/doubletap clicks,
+// the §6 button rows, and the wheel-notch conversion, sign, fractional
+// accumulator and lift-off reset of the rotation (scroll) stream. The
+// remaining §6 mapping-table rows (media/consumer, keyboard, hold
+// auto-scroll) land with fix item P3.15: the mapper already accepts those
+// kinds of events and maps them to nothing until then (an
 // accepted-and-dropped event, deliberately silent — not a wrong output).
 
 #ifndef SKYWRITER_HID_MAPPER_H
@@ -120,6 +122,11 @@ class SkywriterHIDMapper {
   static const bool AIRWHEEL_INVERT;
   // §6 note: the default profile enables AirWheel (circle rows stay dormant).
   static const bool AIRWHEEL_ENABLED;
+  // §5: one sensor AirWheel step (11.25 degrees of rotation, per the
+  // datasheet's 32-steps-per-revolution counter, Interface.pdf Table 4-10)
+  // maps to exactly one wheel notch. Datasheet-derived, NOT a tunable —
+  // it is the sensor's own quantization, not a feel parameter.
+  static const float AIRWHEEL_NOTCH_DEGREES;
 
   explicit SkywriterHIDMapper(HIDMapperSink& sink) : sink_(sink) {}
 
@@ -140,8 +147,13 @@ class SkywriterHIDMapper {
   // with P3.15; garbage (code 1) maps to nothing there.
   void onGesture(uint8_t code, unsigned long now_ms);
 
-  // airwheel(degrees) — signed rotation delta of this frame. §5 semantics
-  // (notches, accumulator, invert) land with P3.14.
+  // airwheel(degrees) — signed rotation delta of this frame (positive =
+  // clockwise). §5 semantics (live since P3.14): converted to wheel notches
+  // at AIRWHEEL_NOTCH_DEGREES per notch, AIRWHEEL_INVERT flips the sign,
+  // fractional notches accumulate in wheel_acc_ so movement is never lost,
+  // whole notches are emitted IMMEDIATELY (scroll is latency-sensitive —
+  // deliberately not coalesced, unlike move reports), and the accumulator
+  // resets on lift-off (tick()).
   void onAirwheel(float degrees, unsigned long now_ms);
 
   // ---- time ----
@@ -171,6 +183,13 @@ class SkywriterHIDMapper {
   float pending_dx_ = 0.0f;          // accumulated, not-yet-reported movement
   float pending_dy_ = 0.0f;          // (float: fractional GAIN carry-over)
   unsigned long last_report_ms_ = 0;     // when the last move report went out
+
+  // AirWheel state (§5, P3.14): fractional wheel notch carry-over. The
+  // accumulator holds whole+fractional notches; the whole part is drained
+  // on every airwheel event (immediate emission), the fraction carries to
+  // the next event. Reset on lift-off (§5: "Accumulator resets on
+  // lift-off") — in tick(), mirroring the touch release.
+  float wheel_acc_ = 0.0f;
 
   // Touch state (§4): the sensor has no release event, so each zone tracks
   // its own press state. held_ is only ever set for zones that have a §6

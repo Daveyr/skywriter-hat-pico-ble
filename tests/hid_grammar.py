@@ -23,8 +23,8 @@ What this module verifies today is **well-formedness** (every ``expect.hid``
 list parses against the grammar above) — plus, since fix item P3.12, the
 scenarios listed in ``MAPPING_ENGINE_ARMED`` (``tests/test_scenarios.py``)
 are replay-asserted against the live mapping engine (``tests/adapters_mapping.py``);
-the remaining scenarios' replay assertions open with P3.13–P3.15, which
-target exactly the scenarios still pending (the manifest is their
+the remaining scenarios' replay assertions open with P3.15, which
+targets exactly the scenarios still pending (the manifest is their
 machine-readable acceptance data).
 '''
 

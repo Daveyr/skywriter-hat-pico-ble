@@ -1,5 +1,5 @@
 '''Direct SkywriterHIDMapper unit tests for the §4 touch semantics
-(fix_plan item P3.13).
+(fix_plan item P3.13) and the §5 AirWheel semantics (fix_plan item P3.14).
 
 Some timing behaviours cannot live in the fixture corpus: the Python driver
 rate-limits repeat touch callbacks by design (default 4 Hz = one dispatch
@@ -15,9 +15,11 @@ drive it at call granularity through the host unit binary in
 resolution as the replay adapters — g++/c++ → zig → ziglang wheel).
 
 Spec: `specs/hid_mapping.md` §4 + §6 button rows, targets AC-MAP-02,
-AC-MAP-03 and the release half of AC-MAP-07. Timing uses the engine's own
-named constants (TOUCH_RELEASE_MS 200, TAP_CLICK_MS 50, LIFT_OFF_MS 100),
-so a hardware-tune change (P4.5) auto-propagates into the arithmetic below
+AC-MAP-03 and the release half of AC-MAP-07; the AirWheel section pins §5
+(AC-MAP-04). Timing uses the engine's own
+named constants (TOUCH_RELEASE_MS 200, TAP_CLICK_MS 50, LIFT_OFF_MS 100,
+AIRWHEEL_NOTCH_DEGREES 11.25), so a hardware-tune change (P4.5)
+auto-propagates into the arithmetic below
 where it matters; scripts are written in terms of the threshold semantics,
 not magic tick numbers, wherever possible.
 '''
@@ -232,3 +234,96 @@ def test_non_button_zones_produce_nothing():
         ('TICK', 1000),
     ])
     assert records == [], records
+
+
+# --------------------------------------------- airwheel (§5 / AC-MAP-04) ----
+# The rotation deltas arrive per-frame from the driver already quantized to
+# whole 11.25° steps (the counter's signed 8-bit difference × 11.25). These
+# tests therefore pin the mapper side of the contract: notch conversion,
+# sign, fractional accumulation, immediate emission and the lift-off reset
+# — in half-notches where a fractional point has to be proved.
+
+def _wheel(notches):
+    return f'HID WHEEL {notches}'
+
+
+def test_one_sensor_step_is_one_notch_up():
+    '''§5: one 11.25° step = one wheel notch; clockwise (positive) =
+    scroll up (away from the user).'''
+    records = _run([
+        ('AIRWHEEL 11.25', 0),
+        ('TICK', 1000),
+    ])
+    assert records == [_wheel(1)], records
+
+
+def test_counter_clockwise_scroll_is_negative_notches():
+    '''§5 sign: counter-clockwise (negative) degrees = scroll down, i.e.
+    negative wheel notches — 45° = four steps = −4 notches.'''
+    records = _run([('AIRWHEEL -45', 0)])
+    assert records == [_wheel(-4)], records
+
+
+def test_full_quarter_turn_emits_all_its_notches_at_once():
+    '''§5: a +90° delta (8 steps, `airwheel_quarter_turn_cw`'s event shape)
+    goes out as ONE wheel report of 8 notches, not eight separate ones.'''
+    records = _run([('AIRWHEEL 90', 0)])
+    assert records == [_wheel(8)], records
+
+
+def test_fractional_notches_accumulate_until_a_whole_notch():
+    '''§5: fractional steps accumulate — a half-notch delta reports nothing,
+    and the next half completes the notch (exactly one report total).'''
+    records = _run([
+        ('AIRWHEEL 5.625', 0),   # half a notch: pending, no wheel report
+        ('TICK', 100),           # (also proves pending ≠ emitted late by tick)
+        ('AIRWHEEL 5.625', 105), # completes the notch: exactly one report
+        ('TICK', 1000),
+    ])
+    assert records == [_wheel(1)], records
+
+
+def test_fraction_remainder_survives_across_events():
+    '''§5 never-lost principle: 16.875° = 1.5 notches emits the whole part
+    (1) immediately and keeps 0.5 pending; a further half-notch completes
+    the second full notch. The 22.5° total is exactly two notches.'''
+    records = _run([
+        ('AIRWHEEL 16.875', 0),  # 1.5 notches → WHEEL 1, remainder 0.5
+        ('AIRWHEEL 5.625', 5),   # +0.5 → completes the second notch
+        ('TICK', 1000),
+    ])
+    assert records == [_wheel(1), _wheel(1)], records
+
+
+def test_wheel_deltas_are_emitted_immediately_not_coalesced():
+    '''§5: wheel deltas are emitted immediately (scroll feel is
+    latency-sensitive — deliberately NOT coalesced like move reports): two
+    deltas arriving INSIDE one move-report interval (REPORT_INTERVAL_MS)
+    still produce two wheel reports.'''
+    records = _run([
+        ('AIRWHEEL 11.25', 0),
+        ('AIRWHEEL 11.25', 2),   # 2 ms < REPORT_INTERVAL_MS (15 ms)
+    ])
+    assert records == [_wheel(1), _wheel(1)], records
+
+
+def test_lift_off_resets_the_wheel_accumulator():
+    '''§5: the accumulator resets on lift-off, so no pending fraction leaks
+    into the next rotation gesture. Contrast pair: the same two half-notch
+    deltas combine into one notch when no lift-off ever happens (no
+    position seen — §3 rule 5's lift-off needs a prior valid position).'''
+    after_lift_off = _run([
+        ('POSITION 500 1000', 0),   # tracking starts (silent baseline)
+        ('AIRWHEEL 5.625', 5),      # half a notch pending
+        ('TICK', 120),              # > LIFT_OFF_MS past the position → lift-off
+        ('AIRWHEEL 5.625', 125),    # fresh accumulator: half a notch again
+        ('TICK', 400),              # proves the two halves never combined
+    ])
+    assert after_lift_off == [], after_lift_off
+
+    without_lift_off = _run([
+        ('AIRWHEEL 5.625', 0),   # no position ever → no lift-off transition
+        ('AIRWHEEL 5.625', 5),   # → the two halves combine into one notch
+        ('TICK', 400),
+    ])
+    assert without_lift_off == [_wheel(1)], without_lift_off
