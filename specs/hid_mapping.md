@@ -49,8 +49,12 @@ word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
   `d * 11.25`. A crossing of 255→0 is +1 step, not −255. (Side effect of
   signed 8-bit arithmetic: any per-frame change above 128 steps reads as
   counter-clockwise — physically implausible within one 5 ms frame, so
-  shortest-path is always correct.)
-  (Both current drivers get this wrong — deviation D3 in `specs/README.md`.)
+  shortest-path is always correct.) The **first AirWheel-valid frame after
+  driver start or after any stretch of AirWheel-invalid frames is a silent
+  baseline**: the counter is free-running, so it cannot be read against a
+  stale reference — that frame only records the reference and emits nothing.
+  (Python side fixed 2026-11-05; the Arduino side is still open — deviation
+  D3 in `specs/README.md`.)
 - **Gesture in-progress frames** (`GestureInfo` bit 31 set, code 0) produce no
   event. Code 1 (garbage) produces a `gesture(1, …)` event which the mapping
   table maps to *nothing*.

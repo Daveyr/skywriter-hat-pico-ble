@@ -64,7 +64,7 @@ class PythonDriverAdapter(ReplayAdapter):
         # or accumulates into, set to its pristine default.
         sky.x = sky.y = sky.z = 0.0
         sky.rotation = 0.0
-        sky._lastrotation = 0.0
+        sky._lastrotation = None
         sky.gesture = 0
         sky.io_error_count = 0
         sky._on_touch_last = {}

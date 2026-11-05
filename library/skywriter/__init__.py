@@ -47,7 +47,10 @@ x = 0.0
 y = 0.0
 z = 0.0
 rotation = 0.0
-_lastrotation = 0.0
+# AirWheel counter reference: None until the first frame with valid AirWheel
+# data establishes the baseline (the counter is free-running — see notes in
+# _handle_sensor_data).
+_lastrotation = None
 _round_to = 4
 _enable_auto_calibration = False
 _enable_events = True
@@ -246,24 +249,39 @@ def _handle_sensor_data(data):
 
     if d_configmask & SW_DATA_AIRWHEEL and d_sysinfo & 0b00000010:
         # Airwheel
-        delta = (d_airwheel[0] - _lastrotation) / 32.0
+        # The sensor counts rotation with a free-running 8-bit counter that
+        # wraps 255->0 (32 counts = one revolution, so 1 count = 11.25
+        # degrees). A hand re-entering the sensing field finds the counter
+        # at an arbitrary value, so the first valid frame after a gap in
+        # AirWheel-valid data only establishes the baseline and emits
+        # nothing.
+        if _lastrotation is None:
+            _lastrotation = d_airwheel[0]
+        else:
+            # Signed 8-bit difference: crossing 255->0 while counting
+            # clockwise is +1 step, not -255.
+            delta = ((d_airwheel[0] - _lastrotation + 128) % 256) - 128
+            degrees = delta * 11.25
 
-        # Delta is in degrees, with 1 = full 360 degree rotation
-        # Positive numbers equal clockwise delta, negative are counter-clockwise
+            # Delta is in degrees, with 32 counts = full 360 degree rotation
+            # Positive numbers equal clockwise delta, negative are counter-clockwise
+            if degrees != 0:
+                if callable(_on_airwheel):
+                    _on_airwheel(degrees)
 
-        if delta != 0 and delta > -0.5 and delta < 0.5:
-            if callable(_on_airwheel):
-                _on_airwheel(delta * 360.0)
+                rotation += degrees
 
-            rotation += delta
+                if rotation < 0:
+                    rotation = 0
 
-            if rotation < 0:
-                rotation = 0
+                if rotation > 1000:
+                    rotation = 1000
 
-            if rotation > 1000:
-                rotation = 1000
-
-        _lastrotation = d_airwheel[0]
+            _lastrotation = d_airwheel[0]
+    else:
+        # This frame carries no valid AirWheel data: the counter may have
+        # free-run meanwhile, so re-baseline on the next valid frame.
+        _lastrotation = None
 
 
 def _handle_status_info(data):

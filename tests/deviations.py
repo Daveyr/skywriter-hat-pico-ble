@@ -13,7 +13,7 @@ Adapter/driver keys used everywhere in the harness:
 
 Ledger row shape (pipe table)::
 
-    | D3 | Python + Arduino | AirWheel delta ignores the 8-bit counter wrap… | evidence |
+    | D3 | Arduino | AirWheel delta ignores the 8-bit counter wrap… | evidence |
 
 The second cell lists affected drivers (free text naming "Python" and/or
 "Arduino"; documentation-only deviations such as D8 name neither).
