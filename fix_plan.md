@@ -226,7 +226,7 @@ docker run -it --rm \
    `specs/ble_hid.md` §5/§10 and the source-level pin were corrected, and
    P4.3's AC-BLE-06 check now verifies the expectation "reconnect WITHOUT
    re-pairing" on hardware.
-   Update (2026-11-05, P3.18 commit `e3ac9ae`): move-report pacing is
+   Update (2026-11-05, P3.18 commit `721e6b1`): move-report pacing is
     live: the engine's cadence is a runtime value re-targeted at the
     host's negotiated BLE connection interval (an HCI-tracked LE
     connection watcher; a [7.5, 15] ms connection-parameter request keeps
@@ -423,7 +423,7 @@ attribute table limit).
 ## Done
 
 - P3.18 — the §7 performance provisions are live in the firmware (commit
-  `e3ac9ae`): move reports are paced at the LIVE BLE connection interval,
+  `721e6b1`): move reports are paced at the LIVE BLE connection interval,
   with delta accumulation and never-coalesced button transitions, the
   software half of AC-BLE-04 (`specs/ble_hid.md` §7; the radio truth —
   ≥ 60 reports/s sustained and < 100 ms end-to-end on a real phone/PC —
