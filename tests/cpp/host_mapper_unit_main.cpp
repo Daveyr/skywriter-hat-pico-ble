@@ -14,6 +14,8 @@
 //         kind: hold|tap|doubletap
 //     POSITION <x> <y> <ms>      mapper.onPosition(x, y, z=0, ms)
 //     AIRWHEEL <degrees> <ms>    mapper.onAirwheel(degrees, ms)
+//     DISCONNECT <ms>            mapper.disconnect(ms) (P3.17: the BLE
+//                                link-loss path of specs/ble_hid.md §6)
 //     TICK <ms>                  mapper.tick(ms)
 //     FIN <ms>                   mapper.finish(ms)
 //
@@ -115,6 +117,12 @@ int main() {
         return 2;
       }
       mapper.onAirwheel(degrees, t);
+    } else if (strcmp(token, "DISCONNECT") == 0) {
+      if (sscanf(line, "%*15s %lu", &t) != 1) {
+        fprintf(stderr, "bad DISCONNECT line: %s", line);
+        return 2;
+      }
+      mapper.disconnect(t);
     } else if (strcmp(token, "TICK") == 0) {
       if (sscanf(line, "%*15s %lu", &t) != 1) {
         fprintf(stderr, "bad TICK line: %s", line);

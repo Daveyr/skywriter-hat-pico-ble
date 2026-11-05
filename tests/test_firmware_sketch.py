@@ -1,4 +1,4 @@
-"""Static pins on the BLE HID firmware sketch (fix item P3.16).
+"""Static pins on the BLE HID firmware sketch (fix items P3.16 + P3.17).
 
 The firmware sketch `pico-arduino/SkywriterController/SkywriterController.ino`
 implements the device-identity / bring-up rules of `specs/ble_hid.md` §4:
@@ -10,10 +10,17 @@ implements the device-identity / bring-up rules of `specs/ble_hid.md` §4:
   libraries linked (their weak-install hooks merge every descriptor into a
   single Report Map), `startHID` called exactly once via exactly one
   `begin()`;
-- the fix item's sensor bring-up note: the firmware sends the four
+- the P3.16 sensor bring-up note: the firmware sends the four
   Set_Runtime_Parameter (0xA2) configuration commands itself (the stock
   `Skywriter.begin()` does not configure the sensor), each the 0x10 control
   write followed by EXACTLY 15 payload bytes.
+
+The P3.17 pins below carry the pairing / battery / connection-lifecycle
+rules of `specs/ble_hid.md` §5, §6, §8 (AC-BLE-03, AC-BLE-07 software side;
+the RF truth is the Phase-4 hardware probes): battery = 100 % at connect
+via the direct battery API, the neutral resync report on (re)connect,
+sensor events dropped while unconnected, held state released on link loss,
+advertising restarted on link loss, and the callback-context deadlock rule.
 
 Radio/GATT/RF truth is the Phase-4 hardware probes; these source-level pins
 only make a software regression (e.g. a reintroduced second `begin()`) fail
@@ -35,6 +42,25 @@ def sketch_code():
     assertions (call counts, identifiers) see only executable text."""
     src = re.sub(r"/\*[\s\S]*?\*/", "", sketch_source())
     return "\n".join(line.split("//")[0] for line in src.splitlines())
+
+
+def function_body(name):
+    """The executable body of function `name`, from the comment-stripped
+    source (braces counted, so nested blocks stay inside)."""
+    src = sketch_code()
+    m = re.search(r"(?:static\s+\w[\w\s&*]*?)?(\b" + re.escape(name)
+                  + r")\s*\([^)]*\)\s*\{", src)
+    assert m, f"function {name} not found"
+    start = m.end()
+    depth = 1
+    i = start
+    while i < len(src) and depth > 0:
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+        i += 1
+    return src[start:i - 1]
 
 
 # ---------------------------------------------------------------- AC-BLE-01
@@ -222,3 +248,109 @@ def test_link_state_is_reported_to_the_serial_console():
     assert "SKYSTATE ble_advertising" in src
     assert "SKYSTATE hid_started" in src
     assert "SKYWRITER-HID boot" in src
+
+
+# ------------------------------------- P3.17: pairing, battery, lifecycle ---
+# (specs/ble_hid.md §5, §6, §8 — AC-BLE-03 / AC-BLE-07 software side; the
+# RF truth of these rules is the Phase-4 hardware probes P4.2/P4.3.)
+
+def test_pairing_needs_no_sketch_code_and_bond_limit_is_documented():
+    """§5: pairing (Just Works + numeric comparison) and bonding live in
+    the core's Security Manager; the sketch documents that — including the
+    RAM-only bond store of this core version, the known AC-BLE-06 gate."""
+    src = sketch_source()
+    assert "Just Works" in src
+    assert "numeric comparison" in src
+    assert "bonding" in src
+    assert "AC-BLE-06" in src and "RAM only" in src, (
+        "the sketch must document the core's RAM-only bond store (the "
+        "AC-BLE-06 hardware gate)")
+
+
+def test_battery_reported_100_at_connect_via_direct_api():
+    """§8: battery = 100 % is refreshed at connect — through
+    `PicoBluetoothBLEHID.setBattery()` directly, never through
+    `MouseBLE.setBattery()` (its `_running` gate is never set by the
+    core, so the wrapper silently does nothing)."""
+    body = function_body("loop")
+    assert "PicoBluetoothBLEHID.setBattery(100)" in body
+    assert not re.search(r"MouseBLE\.setBattery", sketch_code()), (
+        "MouseBLE.setBattery must not be called (unusable core-level bug)")
+    assert "SKYSTATE ble_resync battery=100" in sketch_source()
+
+
+def test_neutral_resync_report_on_connect():
+    """§6 / AC-BLE-07: on (re)connect exactly one neutral report (no
+    buttons, zero deltas, zero wheel) resyncs the host state; a lost
+    media-key release is wiped by the zero consumer report too."""
+    body = function_body("loop")
+    assert "MouseBLE.move(0, 0, 0)" in body
+    assert "KeyboardBLE.consumerRelease()" in body
+    battery_at = body.index("setBattery(100)")
+    resync_at = body.index("MouseBLE.move(0, 0, 0)")
+    assert battery_at < resync_at, (
+        "battery refresh and resync both belong to the connect drain")
+    assert "SKYSTATE ble_resync" in sketch_source()
+
+
+def test_callbacks_are_flag_only_no_hid_send_from_the_radio_context():
+    """The Bluetooth stack's callbacks run in the stack's own context;
+    `PicoBluetoothBLEHID.send()` busy-waits on that same context's
+    send-completion round trip — a send from a callback deadlocks. The
+    opened/closed handlers therefore only set flags (closed restarts
+    advertising, the one BTstack call that is canonical there), and the
+    reasoning stays documented in the sketch."""
+    for name in ("on_ble_opened", "on_ble_closed"):
+        body = function_body(name)
+        for forbidden in (r"MouseBLE\.", r"KeyboardBLE\.",
+                          r"PicoBluetoothBLEHID\.send",
+                          r"PicoBluetoothBLEHID\.setBattery"):
+            assert not re.search(forbidden, body), (
+                f"{name} must not touch the HID send API: {forbidden}")
+    assert "ble_connect_event = true" in function_body("on_ble_opened")
+    assert "ble_disconnect_event = true" in function_body("on_ble_closed")
+    assert "busy-wait" in sketch_source(), (
+        "the deadlock reasoning must be documented")
+
+
+def test_advertising_restarts_on_link_loss():
+    """AC-BLE-05 (≤ 5 s — here: immediately): the closed callback restarts
+    advertising inside the stack's own context."""
+    assert "gap_advertisements_enable(1)" in function_body("on_ble_closed")
+
+
+def test_disconnect_releases_all_held_state():
+    """§6 link loss: the mapper's public disconnect() releases every held
+    hold-row and drops unsent movement; the sketch's own side state — the
+    scheduled pulse queue and the wrapper-latched mouse/keyboard state —
+    is cleared in the same drain so the resync report is really neutral."""
+    body = function_body("loop")
+    assert "mapper.disconnect(now)" in body
+    assert "pulses_clear()" in body
+    assert "MouseBLE.release(MOUSE_ALL)" in body
+    assert "KeyboardBLE.releaseAll()" in body
+    assert "SKYSTATE ble_dropped" in sketch_source()
+    # the serializer never leaves it a stub
+    assert "void pulses_clear()" in sketch_code()
+
+
+def test_unconnected_sensor_events_are_dropped():
+    """§6 / AC-BLE-07: sensor events are dropped while no host is
+    connected — every sensor→mapper callback gates on the live link state
+    and never queues the event; the first suppressed frame prints the
+    probe's evidence line."""
+    for name in ("on_sensor_xyz", "on_sensor_touch", "on_sensor_gesture",
+                 "on_sensor_airwheel"):
+        assert "ble_link_open()" in function_body(name), (
+            f"{name} must drop events while unconnected")
+    assert "sensor_events_dropping_unconnected" in sketch_source()
+
+
+def test_sensor_callbacks_registered_before_the_radio_starts():
+    """A host connecting during bring-up must not fire into unregistered
+    callbacks: the opened/closed callbacks are registered before
+    KeyboardBLE.begin() powers the radio on."""
+    setup_src = function_body("setup")
+    assert setup_src.index("PicoBluetoothBLEHID.setOpenedCB") < \
+        setup_src.index("KeyboardBLE.begin("), (
+        "link callbacks must be registered before the radio starts")

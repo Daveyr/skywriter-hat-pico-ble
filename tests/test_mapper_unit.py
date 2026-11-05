@@ -396,7 +396,104 @@ def test_hold_auto_scroll_stops_on_lift_off():
     assert records == [_wheel(-1), _wheel(-1), _wheel(-1)], records
 
 
-# --------------------------------------------- airwheel (§5 / AC-MAP-04) ----
+# ---------------------------------- §6 BLE disconnect (specs/ble_hid.md §6,
+# fix_plan P3.17): the public disconnect() entry the firmware's link-loss
+# path calls. The release half mirrors the lift-off trigger; the drop half
+# (unsent movement, wheel accumulator) is what the firmware cannot do for
+# the engine.
+
+def test_disconnect_releases_held_button_and_re_enables_re_press():
+    '''§6: on link loss the held hold-row goes up through the sink
+    immediately (its own touch-silence window is irrelevant), the zone's
+    engage state is cleared so the next connection can press again, and
+    nothing is released twice.'''
+    records = _run([
+        ('TOUCH center hold', 0),        # press (left down)
+        ('POSITION 500 1000', 5),        # tracking active (silent baseline)
+        ('TICK', 50),                    # touch still fresh: held
+        ('DISCONNECT', 60),              # link loss → release now
+        ('TICK', 400),                   # long unconnected silence: no
+                                         # duplicate release, no lift-off
+                                         # residue
+        ('TOUCH center hold', 410),      # after reconnect: can press again
+    ])
+    assert records == [
+        _button('left', 'down'),
+        _button('left', 'up'),
+        _button('left', 'down'),
+    ], records
+
+
+def test_disconnect_ends_hold_auto_scroll():
+    '''§6: the auto-scroll hold rows clear on disconnect like any other
+    hold — the interval due at later ticks is silent, and a hold engaged
+    after the (re)connect fires its fresh immediate notch again.'''
+    records = _run([
+        ('TOUCH north hold', 0),   # hold start → immediate notch #1
+        ('DISCONNECT', 10),        # link loss → hold cleared
+        ('TICK', 200),             # interval due: silent
+        ('TOUCH north hold', 210), # after reconnect: fresh session
+        ('TICK', 215),             # (its next interval notch is later)
+    ])
+    assert records == [_wheel(-1), _wheel(-1)], records
+
+
+def test_disconnect_discards_unsent_pointer_movement():
+    '''§6 "Unconnected: sensor events are dropped, not queued": pointer
+    movement that never got a move report is DROPPED at disconnect, not
+    flushed at the next connect — after reconnect the first real movement
+    is measured from the fresh baseline alone, with no stale delta attached.
+    (contrast: a flush here would fold the 2.45-unit stale pending into the
+    fresh 4-unit move and emit `MOVE 6 6`.)'''
+    records = _run([
+        ('POSITION 500 1000', 0),    # tracking starts (silent baseline)
+        ('POSITION 1128 1496', 10),  # +628/+496 raw × GAIN → 2.453/1.938
+                                     # pending; inside the 15 ms report
+                                     # interval → never reported
+        ('DISCONNECT', 12),          # the pending movement dies here
+        ('POSITION 400 600', 400),   # fresh session: silent re-baseline
+        ('POSITION 1424 1624', 405), # fresh delta +1024 each = exactly 4.0
+                                     # cursor units (more than the 15 ms
+                                     # interval since the last report)
+        ('FIN', 410),                # nothing else may flush afterwards
+    ])
+    assert records == ['HID MOVE 4 4'], records
+
+
+def test_disconnect_rebaselines_position_like_lift_off():
+    '''§3 rule 4 through the wireless life cycle: the first valid position
+    after a disconnect silently becomes the baseline — no cursor flight
+    measured across the gap, and jump rejection is not provoked by the
+    reconnect (the position after reconnect may arrive at a completely
+    different spot).'''
+    records = _run([
+        ('POSITION 500 1000', 0),      # active session, baseline set
+        ('DISCONNECT', 10),            # link loss
+        ('POSITION 10000 25000', 400), # reconnect: a wholly different spot
+                                       # (raw delta > JUMP_THRESHOLD would
+                                       # have been jump-dropped — instead
+                                       # it must be a silent baseline)
+        ('POSITION 10256 25256', 405), # then a small real move: +1,+1
+        ('TICK', 500),
+    ])
+    assert records == ['HID MOVE 1 1'], records
+
+
+def test_disconnect_clears_the_wheel_accumulator():
+    '''§5's lift-off reset through the §6 life cycle: a fractional wheel
+    notch pending from before a link loss must not leak into the rotation
+    stream of the next session.'''
+    records = _run([
+        ('POSITION 500 1000', 0),  # tracking starts (silent baseline)
+        ('AIRWHEEL 5.625', 5),     # half a notch pending
+        ('DISCONNECT', 10),        # accumulator cleared
+        ('AIRWHEEL 5.625', 400),   # fresh session: half a notch again
+        ('TICK', 500),             # proves the two halves never combined
+    ])
+    assert records == [], records
+
+
+# -------------------------------------------- airwheel (§5 / AC-MAP-04) ----
 # The rotation deltas arrive per-frame from the driver already quantized to
 # whole 11.25° steps (the counter's signed 8-bit difference × 11.25). These
 # tests therefore pin the mapper side of the contract: notch conversion,

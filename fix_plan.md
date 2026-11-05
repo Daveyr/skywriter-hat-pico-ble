@@ -202,6 +202,20 @@ docker run -it --rm \
    Environment section documents it; the Dockerfile additionally symlinks
    the `SkywriterHID` engine library into the Arduino user directory.
    82 pytest tests; `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.17 commit `445d843`): the connection
+   life cycle is wired (§5/§6/§8, AC-BLE-03/07 software side) — battery
+   refreshed to 100 % at connect through `PicoBluetoothBLEHID.setBattery`
+   directly (the `MouseBLE.setBattery` wrapper is confirmed unusable),
+   one neutral resync report per (re)connect, held buttons/scroll/media
+   state released on link loss through a new public
+   `SkywriterHIDMapper::disconnect()`, sensor events dropped while
+   unconnected with a probe-evidence serial line, and advertising
+   restarted inside the link-loss callback. Design constraint recorded:
+   the Bluetooth stack's callbacks must never call the HID send API (its
+   send busy-waits on the stack's own context — a send from a callback
+   deadlocks); life-cycle work runs in loop(). Code-level bond-store
+   truth for AC-BLE-06 established against core 6.3.1 — RAM-only (see the
+   new item P3.17b). 95 pytest tests (82 + 13); `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -295,21 +309,27 @@ library both use). Python driver fixes go to `library/`.
 in Phase 4 on hardware
 
 - [x] P3.16 → done, moved to the Done section below.
-- [ ] P3.17 Firmware sketch: pairing, battery, and lifecycle wiring per
-      `specs/ble_hid.md` §5, §6, §8 — battery reported 100 % at connect,
-      drop reports while unconnected, neutral resync report on (re)connect,
-      back to advertising on link loss. Target `AC-BLE-03`, `AC-BLE-07`
-      (verified in Phase 4).
-      API note from P3.16: call `PicoBluetoothBLEHID.setBattery()` (directly,
-      e.g. from the opened callback), **not** `MouseBLE.setBattery()` — the
-      latter gates on `MouseBLE_`'s own `_running`, which the core never sets
-      (not even in its own `begin()`), so it silently does nothing.
-      Note from P3.13: the §4 "disconnect releases all held buttons" rule needs a mapper API the engine deliberately
-      does not have yet (its private `release_all_buttons()` fires only on
-      lift-off; `finish()` is a movement flush and does not touch buttons,
-      by design) — add a public release-all entry point to
-      `SkywriterHIDMapper` and call it from the BLE (Bluetooth Low Energy)
-      disconnect path here.
+- [x] P3.17 → done, moved to the Done section below.
+- [ ] P3.17b Resolve the pairing-bond persistence question before the
+      hardware loop inherits a stale assumption (AC-BLE-06 gate, §5 open
+      question 1). Code-level truth established by P3.17 against core
+      6.3.1: `PicoBluetoothBLEHID.startHID` requests Secure-Connections
+      bonding (`SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING`) but the
+      Security Manager's bond database is the **RAM store**
+      (`le_device_db_memory.c` — the flash-backed
+      `le_device_db_tlv.c` is compiled from CMake yet `#error`s unless
+      `NVM_NUM_DEVICE_DB_ENTRIES` is defined in `btstack_config.h`, which
+      the arduino port never defines; `MAX_NR_LE_DEVICE_DB_ENTRIES = 1`).
+      So a bonded host re-pairs after every Pico W power cycle on this
+      core version. P4.3 must verify this on hardware; if confirmed,
+      either (a) wire the flash store — needs core-level build
+      configuration the arduino-pico port does not set (define
+      `NVM_NUM_DEVICE_DB_ENTRIES` + init `btstack_tlv_flash_bank`), or
+      (b) write the re-pair limitation up as a spec deviation row in
+      `specs/README.md` (§5 explicitly permits this) and update
+      `specs/ble_hid.md` §5/§10 (the sketch already documents the
+      limitation in its pairing comment). The sketch comment must be kept
+      in step with whichever outcome lands.
 - [ ] P3.18 Firmware sketch: performance provisions per `specs/ble_hid.md`
       §7 — report pacing to the connection interval with delta accumulation,
       button/press transitions never coalesced away. Target `AC-BLE-04`
@@ -392,6 +412,82 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.17 — the BLE (Bluetooth Low Energy) connection life cycle is wired
+  into the firmware sketch (commit `445d843`): `specs/ble_hid.md` §5, §6, §8
+  (targets AC-BLE-03 / AC-BLE-07 software side; their radio truth stays
+  with the Phase-4 probes P4.2/P4.3). In plain language: the controller
+  now behaves correctly through the whole life of its wireless connection
+  — telling the host its battery level, putting itself in a clean state
+  when the connection drops, and introducing itself with a known-state
+  report when it comes back. Parts:
+  - **Battery (§8, AC-BLE-03 software side)**: 100 % at boot (unchanged,
+    `startHID`'s default) and refreshed to 100 % at every connect —
+    through `PicoBluetoothBLEHID.setBattery(100)` called directly; the
+    `MouseBLE.setBattery()` wrapper is confirmed unusable (the core never
+    sets `MouseBLE_::_running`, not even in its own `begin()`).
+  - **Neutral resync (§6 (re)connect row, AC-BLE-07)**: on connect the
+    sketch sends exactly one report in which nothing is held and nothing
+    moves (`MouseBLE.move(0, 0, 0)` — `MouseBLE_::move` always emits, its
+    zero-suppression lives in the mapper, not here, which is exactly why
+    it is the right vehicle) plus a zero consumer-control (media-key)
+    report to wipe a media key whose release pulse fell into the link
+    loss. Serial line `SKYSTATE ble_resync battery=100 neutral_report`.
+  - **Release-all on link loss (§6 + the P3.13 note)**: the mapper
+    gained the public `SkywriterHIDMapper::disconnect(now_ms)` — held
+    hold-rows (buttons and auto-scroll) go up through the sink
+    immediately via the existing private `release_all_buttons()`,
+    un-sent pointer movement is DROPPED (never replayed onto the new
+    link), the AirWheel (scroll) accumulator clears, and the next valid
+    position silently re-baselines (the wireless-session equivalent of
+    §3 rule 4's lift-off re-baseline). 5 new mapper unit tests pin all
+    four effects through a new `DISCONNECT` instruction in
+    `tests/cpp/host_mapper_unit_main.cpp`. The sketch's disconnect drain
+    additionally clears its own side state the engine cannot see: the
+    scheduled tap/media pulse queue (`pulses_clear()` — a tap whose 50 ms
+    release fell into the link loss must not be delivered to the NEXT
+    connection), and the Bluetooth wrappers' latched mouse button bits
+    (`MouseBLE.release(MOUSE_ALL)`) and keyboard report
+    (`KeyboardBLE.releaseAll()`) so the resync report really is neutral.
+  - **Events dropped while unconnected (§6 Unconnected row, AC-BLE-07)**:
+    all four sensor→mapper callbacks gate on `PicoBluetoothBLEHID.
+    connected()` and drop the event; the first suppressed frame prints
+    `SKYSTATE sensor_events_dropping_unconnected` once per link loss —
+    the hardware probe's evidence that events are dropped, not queued.
+  - **Callback-context deadlock rule (design constraint, pinned)**: the
+    Bluetooth stack's open/close callbacks run inside the stack's own
+    run-loop context; `PicoBluetoothBLEHID.send()` busy-waits on that
+    same context's send-completion round trip, so a send from a callback
+    would deadlock. The handlers therefore only set flags — plus the
+    advertising restart (`gap_advertisements_enable(1)`), the one
+    BTstack call that is canonical from a packet handler (AC-BLE-05's
+    ≤ 5 s: met immediately). All HID-visible life-cycle work drains in
+    `loop()`, before the iteration's sensor events reach the engine.
+    Pinned by `test_callbacks_are_flag_only_no_hid_send_from_the_
+    radio_context` (8 new source-level tests in
+    `tests/test_firmware_sketch.py`).
+  - **Bring-up ordering**: the open/close callbacks are now registered
+    BEFORE `KeyboardBLE.begin()` powers the radio on (a host connecting
+    during bring-up no longer fires into unregistered callbacks); the
+    sensor stack, event wiring and radio bring-up order are unchanged.
+  - **Pairing/bonding documentation (§5)**: the sketch records that
+    pairing needs no firmware code (the core's Security Manager
+    auto-confirms Just Works and numeric comparison and requests
+    bonding) together with the code-level bond-store truth discovered
+    while wiring this item: the core's bond database is the RAM store
+    (`le_device_db_memory.c`; the flash-backed `le_device_db_tlv.c`
+    `#error`s without a `btstack_config.h` define the arduino port never
+    sets) — so hosts re-pair after a Pico W power cycle on this core
+    version. AC-BLE-06 verifies on hardware; the decision persists-vs-
+    deviates is new fix item **P3.17b**.
+  - Honest scope note: `ble_link_open()` reads the stack's connection
+    flag from the Arduino loop context without a lock — a 16-bit flag
+    read torn between contexts is not a realistic hazard on this core,
+    but the RF truth of every §5/§6/§8 rule above is deferred to
+    P4.2/P4.3 exactly as the spec's verification column assigns it.
+  Verified: `bash run_tests.sh` green 4/4; 95 pytest tests (82 + 13);
+  `pico-arduino/SkywriterController` compiles for the Pico W (22 % flash
+  / 34 % RAM).
 
 - P3.16 — the FIRST Pico W firmware sketch exists and compiles for the
   board (commit `f5c8316`): `pico-arduino/SkywriterController/
