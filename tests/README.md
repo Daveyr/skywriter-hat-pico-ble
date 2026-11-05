@@ -21,6 +21,7 @@ by `bash run_tests.sh` (`python3 -m pytest -q tests/`).
 | `test_harness.py` | 11 meta-tests: manifest/frame integrity, every scenario replays on both adapters, fresh-state identity on reruns, simulated-gap accounting, VirtualClock non-sleeping, plus today-true plumbing pins (F01 position values on both drivers, flick W→E dispatch, tap dispatch). |
 | `test_scenarios.py` | Spec assertions per scenario (P3.2): manifest lint (structured schema, pending annotations resolve to open spec-ledger rows), canonical expectation compare per driver, deviation-realization checks, HID outcome well-formedness, and cross-driver parity (AC-MAP-09). |
 | `test_mapper_unit.py` | Direct mapper unit tests (P3.13): the §4 touch semantics the corpus cannot carry (repeat-inert presses, exact release/lift-off tick timing, tap/doubletap clicks, §6 button rows) asserted against `SkywriterHIDMapper` through a dedicated host binary (`tests/cpp/host_mapper_unit_main.cpp`). |
+| `test_firmware_sketch.py` | Static pins on the BLE HID firmware sketch (P3.16): composite Report Map bring-up rules (`AC-BLE-01`/`02`: one `begin()`, device name, sensor-configuration commands) at source level; radio truth stays with the Phase-4 probes. |
 
 ## Canonical grammar (P3.2)
 

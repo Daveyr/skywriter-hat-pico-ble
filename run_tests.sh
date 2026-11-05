@@ -73,6 +73,11 @@ fixture_replay() {
 
 # 4. Firmware compiles: every sketch folder (directory containing a .ino)
 # must build for the Pico W (Raspberry Pi's wireless microcontroller board).
+# The `ipbtstack=ipv4btcble` menu selects "IPv4 + Bluetooth" — the core's
+# BTstack (its Bluetooth implementation) libraries are not even linked
+# without it, so any sketch using the BLE HID libraries fails a plain build
+# with "This library needs Bluetooth enabled". Harmless for sketches that
+# don't touch Bluetooth.
 # Build output goes to a temporary directory so the flash-tool-managed
 # build/ folders are never touched.
 sketch_compile() {
@@ -81,11 +86,12 @@ sketch_compile() {
     return 0
   fi
   local out rc=0 sketch dir
+  local FQBN='rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble'
   out=$(mktemp -d)
   while IFS= read -r sketch; do
     dir=$(dirname "$sketch")
     echo "compiling $dir"
-    arduino-cli compile -b rp2040:rp2040:rpipicow --output-dir "$out/$(basename "$dir")" "$dir" || rc=1
+    arduino-cli compile -b "$FQBN" --output-dir "$out/$(basename "$dir")" "$dir" || rc=1
   done < <(find pico-arduino arduino -name '*.ino' -not -path '*/build/*' 2>/dev/null)
   rm -rf "$out"
   return $rc

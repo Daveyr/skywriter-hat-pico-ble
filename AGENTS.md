@@ -11,7 +11,8 @@ Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ A
 
 ## Environment
 - Container Python: `Python 3.12.3`; Arduino toolchain: `/home/user/local/bin/arduino-cli`.
-- Pico W target (`pico-arduino/flash.sh`): FQBN `rp2040:rp2040:rpipicow` (Earle Philhower core), serial `/dev/ttyACM*` or `/dev/ttyUSB*` (running USB ID `2e8a:f00a`), BOOTSEL drive `RPI-RP2` (bootloader USB ID `2e8a:0003`). Connect via a direct USB port (unreliable behind hubs).
+- Pico W target (`pico-arduino/flash.sh`): FQBN `rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble` (Earle Philhower core).
+  The `ipbtstack=ipv4btcble` suffix is the core's "IPv4 + Bluetooth" build menu: the BTstack (Bluetooth) libraries are not linked without it, so any BLE HID (Bluetooth Low Energy Human Interface Device) sketch — e.g. `pico-arduino/SkywriterController` — fails a plain-FQBN build with "This library needs Bluetooth enabled". `pico-arduino/flash.sh` and `run_tests.sh` pass this option; use it for any manual `arduino-cli compile`. Serial port `/dev/ttyACM*` or `/dev/ttyUSB*` (running USB ID `2e8a:f00a`), BOOTSEL drive `RPI-RP2` (bootloader USB ID `2e8a:0003`). Connect via a direct USB port (unreliable behind hubs).
 - Package metadata pins: `X-Python-Version: >= 2.7`, `X-Python3-Version: >= 3.4` (`packaging/debian/control`), `install_requires=['RPi.GPIO']` (`library/setup.py`), `autopy==0.51` (`examples/README.md`).
 - System dependencies on Raspberry Pi (`README.md`, `packaging/debian/control`):
   ```bash
@@ -30,7 +31,7 @@ Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ A
   ```
 - **Compile Pico W sketch only** (`pico-arduino/flash.sh`):
   ```bash
-  arduino-cli compile -b rp2040:rp2040:rpipicow --output-dir build path/to/sketch
+  arduino-cli compile -b rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble --output-dir build path/to/sketch
   ```
 - **Install Python dependencies**: `python3 -m pip install skywriter` (`README.md`) or `cd library && python3 setup.py install` (`library/setup.py`).
 - **Lint & Full Debian build**: No Python linter or typechecker is configured (`library/skywriter/__init__.py` has `# noqa: E241` comments). Full Debian build + `lintian` + `gpg --verify` (`packaging/makeall.sh`):

@@ -4,7 +4,10 @@
 # present) or already in BOOTSEL mode (only the RPI-RP2 drive present).
 set -eu
 
-FQBN=rp2040:rp2040:rpipicow
+FQBN=rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble
+# `ipbtstack=ipv4btcble` = the core's "IPv4 + Bluetooth" build option: without
+# it the BTstack (Bluetooth) libraries are not linked and any BLE (Bluetooth
+# Low Energy) HID sketch fails with "This library needs Bluetooth enabled".
 DRIVE_LABEL=RPI-RP2
 BUILD_DIR=build
 

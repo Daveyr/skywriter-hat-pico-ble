@@ -94,7 +94,8 @@ RUN install -d -m 0700 /home/dev/.ssh && \
                /home/dev/.arduino15 /home/dev/.arduino15/libraries && \
     echo '{"$schema":"https://opencode.ai/config.json","model":"opencode-go/glm-5.3-flash","permissions":[{"action":"*","resource":"*","effect":"allow"}]}' \
         > /home/dev/.config/opencode/opencode.json && \
-    ln -s /workspace/arduino/Skywriter /home/dev/.arduino15/libraries/Skywriter
+    ln -s /workspace/arduino/Skywriter /home/dev/.arduino15/libraries/Skywriter && \
+    ln -s /workspace/pico-arduino/SkywriterHID /home/dev/.arduino15/libraries/SkywriterHID
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["bash"]
