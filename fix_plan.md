@@ -233,23 +233,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.11 → done, moved to the Done section below.
 - [x] P3.11b → done, moved to the Done section below.
 - [x] P3.11c → done, moved to the Done section below.
-
-- [ ] P3.11d The poll thread dies on the FIRST I2C error (discovered by
-      P3.11c, small): `AsyncWorker.run()` treats any `False` return from
-      `_do_poll` as "abort looping" (`if not self.todo(): stop_event.set();
-      break`), which silently ends the background polling thread after the
-      first bus error — and that is exactly what `_do_poll` returns from its
-      `except IOError` path, whose `io_error_count`-based "up to 10
-      consecutive errors" grace (and the raise past 10) can never be reached
-      because the thread is already dead after error #1. The fixture-replay
-      path is unaffected (it drives `_do_poll` directly). Fix sketch:
-      `_do_poll` should return `True` while the error counter still has
-      grace (so the loop retries the next 5 ms tick) and only the >10 raise
-      ends the thread (an unhandled exception terminates it with a visible
-      traceback in the log); decide explicitly whether a persistently dead
-      bus should also set the worker's stop event cleanly instead of dying
-      via raise. Pin with a mock-bus test that the FIRST error does not stop
-      the thread.
+- [x] P3.11d → done, moved to the Done section below.
 
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 

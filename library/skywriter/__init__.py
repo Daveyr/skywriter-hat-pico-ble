@@ -420,6 +420,30 @@ def _handle_firmware_info(data):
         raise Exception("Unknown GestIC Library status (FwValid 0x%02X)" % d_fw_valid)
 
 
+def _poll_i2c_error():
+    '''Shared I2C (Inter-Integrated Circuit) read-error handling (P3.11d).
+
+    The background polling thread (AsyncWorker) treats a ``False`` return from
+    ``_do_poll`` as "abort looping", so the old ``return False`` on an
+    ``IOError`` silently ended the whole poll thread on the FIRST bus error —
+    the config below (a grace of 10 consecutive errors, then raise) could
+    never be reached. The rule now: an I/O error is ONE bad poll cycle, so the
+    shared grace counter tracks consecutive failures and the function returns
+    True while the grace holds — the loop simply retries on the next tick.
+    Past the grace the exception raises: the thread dies with a VISIBLE
+    traceback (a persistently dead bus is a diagnosable hardware fault, not a
+    state to hide or race-wait a second shutdown path on) — callers stop the
+    worker cleanly themselves via ``stop()`` / ``_stop_poll()``.
+    '''
+    global io_error_count
+
+    io_error_count += 1
+    if io_error_count > 10:
+        raise Exception("Skywriter encountered more than 10 consecutive I2C IO errors!")
+
+    return True
+
+
 def _do_poll():
     global io_error_count
 
@@ -436,78 +460,78 @@ def _do_poll():
         GPIO.setup(SW_XFER_PIN, GPIO.OUT, initial=GPIO.LOW)
 
         try:
-            data = i2c.read_i2c_block_data(SW_ADDR, 0x00, 26)
-            io_error_count = 0
-
-        except IOError:
-            io_error_count += 1
-            if io_error_count > 10:
-                raise Exception("Skywriter encoutered nore than 10 consecutive I2C IO errors!")
-            return False
-
-        # Size-aware frame reads (fix item P3.11c). The Size field (frame
-        # byte 0, Interface.pdf §3.3) counts the whole message INCLUDING
-        # this 4-byte header — e.g. 0x84 = 132 bytes for Fw_Version_Info
-        # (§3.5.1) — and the protocol recommends sizing the read from it
-        # (§2.3 note 1). The first read asks 26 bytes so the classic
-        # full-layout sensor frame stays a single read; a longer message is
-        # fetched with continuation reads while the transfer (TS) pin is
-        # still asserted, chunked at 32 bytes because of the SMBus cap
-        # above — a complete 132-byte frame therefore arrives as
-        # 26 + 32 + 32 + 32 + 10. The sensor is expected to continue its
-        # buffer across the reads of one asserted transfer; confirming that
-        # continuation on real hardware is recorded in fix item P4.1.
-        d_size = data[0]
-
-        while 4 <= d_size <= SW_MAX_MESSAGE_SIZE and len(data) < d_size:
             try:
-                rest = i2c.read_i2c_block_data(
-                    SW_ADDR, 0x00, min(SW_I2C_READ_CHUNK, d_size - len(data)))
+                data = i2c.read_i2c_block_data(SW_ADDR, 0x00, 26)
                 io_error_count = 0
 
             except IOError:
-                io_error_count += 1
-                if io_error_count > 10:
-                    raise Exception("Skywriter encoutered nore than 10 consecutive I2C IO errors!")
-                return False
+                return _poll_i2c_error()
 
-            if not rest:
-                # The buffer gave nothing more: the frame cannot be
-                # completed, so do not dispatch a half-read message.
-                break
+            # Size-aware frame reads (fix item P3.11c). The Size field (frame
+            # byte 0, Interface.pdf §3.3) counts the whole message INCLUDING
+            # this 4-byte header — e.g. 0x84 = 132 bytes for Fw_Version_Info
+            # (§3.5.1) — and the protocol recommends sizing the read from it
+            # (§2.3 note 1). The first read asks 26 bytes so the classic
+            # full-layout sensor frame stays a single read; a longer message is
+            # fetched with continuation reads while the transfer (TS) pin is
+            # still asserted, chunked at 32 bytes because of the SMBus cap
+            # above — a complete 132-byte frame therefore arrives as
+            # 26 + 32 + 32 + 32 + 10. The sensor is expected to continue its
+            # buffer across the reads of one asserted transfer; confirming that
+            # continuation on real hardware is recorded in fix item P4.1.
+            d_size = data[0]
 
-            # Never keep more than the Size field promises: a continuation
-            # that answers beyond the message end (sensor padding, or a
-            # mocked bus over-answering the request count) must not spill
-            # into the payload dispatch below.
-            data += rest[:d_size - len(data)]
+            while 4 <= d_size <= SW_MAX_MESSAGE_SIZE and len(data) < d_size:
+                try:
+                    rest = i2c.read_i2c_block_data(
+                        SW_ADDR, 0x00, min(SW_I2C_READ_CHUNK, d_size - len(data)))
+                    io_error_count = 0
 
-        # d_flags = data[1]
-        # d_seq = data[2]
+                except IOError:
+                    return _poll_i2c_error()
 
-        # Dispatch only complete frames, and dispatch them WITHOUT their
-        # header: payload = the frame's Size-field byte range minus the
-        # 4-byte header (size, flags, sequence, message ID), so the handlers
-        # index payload offsets from 0 (the P3.3 off-by-four contract). A
-        # Size field under 4 can only be corrupt, and a read that could not
-        # be completed up to d_size is a partial frame: both are skipped for
-        # this poll cycle instead of being decoded half-read, but the
-        # transfer line is still released below.
-        if d_size >= 4 and len(data) >= d_size:
-            payload = data[SW_HEADER_SIZE:d_size]
+                if not rest:
+                    # The buffer gave nothing more: the frame cannot be
+                    # completed, so do not dispatch a half-read message.
+                    break
 
-            d_ident = data[3]
+                # Never keep more than the Size field promises: a continuation
+                # that answers beyond the message end (sensor padding, or a
+                # mocked bus over-answering the request count) must not spill
+                # into the payload dispatch below.
+                data += rest[:d_size - len(data)]
 
-            if d_ident == 0x91:
-                _handle_sensor_data(payload)
+            # d_flags = data[1]
+            # d_seq = data[2]
 
-            elif d_ident == 0x15:
-                _handle_status_info(payload)
+            # Dispatch only complete frames, and dispatch them WITHOUT their
+            # header: payload = the frame's Size-field byte range minus the
+            # 4-byte header (size, flags, sequence, message ID), so the handlers
+            # index payload offsets from 0 (the P3.3 off-by-four contract). A
+            # Size field under 4 can only be corrupt, and a read that could not
+            # be completed up to d_size is a partial frame: both are skipped for
+            # this poll cycle instead of being decoded half-read, but the
+            # transfer line is still released below.
+            if d_size >= 4 and len(data) >= d_size:
+                payload = data[SW_HEADER_SIZE:d_size]
 
-            elif d_ident == 0x83:
-                _handle_firmware_info(payload)
+                d_ident = data[3]
 
-        GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                if d_ident == 0x91:
+                    _handle_sensor_data(payload)
+
+                elif d_ident == 0x15:
+                    _handle_status_info(payload)
+
+                elif d_ident == 0x83:
+                    _handle_firmware_info(payload)
+
+        finally:
+            # Release the transfer line on EVERY exit path of the transfer —
+            # including an I2C error (the grace returns from within, the
+            # >10-exhaustion raises from within) — so the sensor's data
+            # buffers are always unlocked for the next cycle.
+            GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     return True
 
