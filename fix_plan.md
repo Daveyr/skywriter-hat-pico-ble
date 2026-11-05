@@ -239,6 +239,18 @@ docker run -it --rm \
     `ble_hid.md` §10 (send-blocking behaviour on slow connection
     intervals — the measured pace and the host's parameter decision are
     what that probe must answer).
+   Update (2026-11-05, P3.19 + P3.20 commits): deviation D8 is closed —
+   the last open row — and the deviation ledger table is EMPTY: the
+   AGENTS.md gotchas ("begin() sends no SW_SET_RUNTIME"; poll() resets
+   the transfer pin to INPUT) are TRUE of the current tree, so the
+   stale side was the ledger row itself and it was removed with a
+   closure note (the Python gotcha's line references were refreshed to
+   96/344); `bash run_tests.sh` stays green 4/4 with the empty table
+   (no fixture annotation ever referenced D8, so nothing re-armed).
+   With every Phase-3 item done, the P3.20 gate fired: the
+   `READY_FOR_HW` marker is written in the repository root listing
+   precisely the Phase-4 tests (P4.1–P4.6) and their pass/fail
+   criteria — the outer hardware loop takes over from here.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -338,21 +350,9 @@ in Phase 4 on hardware
       flash-backed; the P3.17 RAM-only assumption came from the wrong
       config file).
 - [x] P3.18 → done, moved to the Done section below.
-- [ ] P3.19 Truth-check the AGENTS.md gotchas (deviation D8): verify the
-      "`begin()` does not send `SW_SET_RUNTIME`" claim against current code
-      and fix the doc if stale; re-check `poll()` `INPUT` vs
-      `INPUT_PULLUP`. (Context discovered by P3.8: commit `c6aecc7` — the
-      pre-loop revert of `arduino/Skywriter/` to the pristine upstream
-      library — removed the four runtime-parameter commands from `begin()`,
-      so both AGENTS.md gotcha claims are currently *accurate* (`begin()`
-      sends no `SW_SET_RUNTIME`, `poll()` still resets the pin mode to
-      `INPUT`); the stale side is the D8 ledger row itself, which claims the
-      gotcha is outdated. P3.19 should resolve D8 on the
-      specs/README.md/doc side, not by re-adding configuration code — sensor
-      bring-up belongs to the P3.16 firmware.)
-- [ ] P3.20 Gate: when 3a–3e are done and everything left needs the Pico W on
-      a desk, write `READY_FOR_HW` listing exactly the Phase 4 tests and
-      their pass/fail criteria.
+- [x] P3.19 → done, moved to the Done section below.
+- [x] P3.20 → done, moved to the Done section below (the `READY_FOR_HW`
+      marker's Phase-4 test list is the ledger for the outer loop).
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -421,6 +421,60 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.20 — the hardware gate fired (this commit): with 3a–3e complete and
+  every remaining Phase-3 item closed, the `READY_FOR_HW` marker is written
+  in the repository root (gitignored, never committed) listing exactly what
+  the outer hardware loop (Phase 4, P4.1–P4.6) must test and each test's
+  pass/fail criteria: the serial bring-up and framing probe (boot banner
+  `SKYSTATE hid_started`/`sensor_ok`, 200 Hz streaming, the P3.11b 132-byte
+  whole-frame reads and the P3.11c chunked-continuation reads on a real
+  bus), the Bluetooth scan/GATT/pairing probe for AC-BLE-01/02/03, the
+  life-cycle probe for AC-BLE-04 (latency < 100 ms, ≥ 60 reports/s, exact
+  button transitions, `SKYSTATE pace` evidence), AC-BLE-05 (advertising
+  within 5 s of link loss), AC-BLE-06 (bonded host reconnects after a power
+  cycle WITHOUT re-pairing — expected PASS per the P3.17b flash-backed
+  bond-store truth), AC-BLE-07 (events dropped while unconnected, one
+  neutral resync on connect), the §10 open-question-3 send-block probe, the
+  `ralph_hw.sh`/`HW_REPORT.md` protocol (P4.4), the manual multi-OS smoke +
+  feel-tuning with the values recorded back into `hid_mapping.md` §3 (P4.5,
+  AC-BLE-08), and real-frame reconciliation of the non-vendor fixtures with
+  the AirWheel wrap question (P4.6). Nothing further is doable without the
+  Pico W on a desk — end of this iteration set.
+- P3.19 — deviation D8 closed and the deviation ledger is now EMPTY (commit
+  `18ee099`). In plain language: the project's developer notes ("gotchas")
+  had been flagged by the tracking ledger as possibly out of date — the
+  ledger row claimed the Arduino driver's `begin()` DID send the sensor's
+  four configuration commands at startup. The truth-check proved the notes
+  are correct as written, so the ledger row itself was the stale side: the
+  fix is documentation only, no code behaviour changed and nothing needed
+  re-arming (no fixture expectation ever referenced D8). Parts:
+  - **Verified against the current tree**: `arduino/Skywriter/skywriter.cpp`
+    `begin()` (lines 4–17) sends no Set_Runtime_Parameter (0xA2) traffic at
+    all — only GPIO (General-Purpose Input/Output) setup for the sensor's
+    transfer-request pin (INPUT_PULLUP) and reset pin, plus the reset pulse;
+    sensor bring-up lives in the `SkywriterController` firmware sketch
+    (P3.16, four exact 15-payload-byte commands with acknowledge polling) —
+    exactly how the gotcha now reads. And `poll()` still resets the transfer
+    pin to plain `INPUT` at the end of every transfer (line 74), the gotcha's
+    second (still valid) claim. Decision recorded: the pin-mode quirk stays
+    as documented upstream behaviour — no spec text pins a pin mode, so this
+    is not a deviation, only a note.
+  - The Python gotcha's substance also holds (`_on_airwheel` starts as an
+    empty list and is checked with `callable()`); only its line references
+    had drifted — refreshed to 96 and 344 with a dated truth-check note.
+  - `specs/README.md`: the D8 row is removed; the table is empty since
+    2026-11-05 with a closure-history note explaining the row-vs-truth
+    reversal (same shape as D2's closure: a pre-loop commit — `c6aecc7` —
+    removed the code the row originally described) and the void-row
+    convention (`tests/deviations.py` treats every remaining row as live,
+    so a resolved row must be deleted in the same change that closes it).
+  - `tests/README.md`, `tests/deviations.py` docstring,
+    `tests/test_harness.py` and `tests/test_scenarios.py` docstrings: the
+    D8 enumerations dropped/rewritten (D8 was documentation-only, so no
+    manifest annotation was ever attached — the annotation lint is vacuously
+    green with an empty table, verified).
+  Verified: `bash run_tests.sh` green 4/4; 103 pytest tests (same count).
 
 - P3.18 — the §7 performance provisions are live in the firmware (commit
   `721e6b1`): move reports are paced at the LIVE BLE connection interval,
