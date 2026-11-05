@@ -8,9 +8,7 @@ globals directly — the same globals its public decorators write.
 
 Frame handling mirrors ``_do_poll()``'s dispatch: header ``ID`` decides which
 ``_handle_*`` function receives the **payload** (frame minus the 4-byte
-header). Note the manifest expects exactly this payload slicing (deviation D1
-is about ``_do_poll`` passing the *full* frame; feeding the payload here keeps
-the harness on the documented contract).
+header) — the same contract ``_do_poll`` implements since the D1 fix (P3.3).
 
 The driver's wall-clock ``millis()`` is pointed at the replay session's
 VirtualClock so touch repeat-limiting is simulated time, not real time.

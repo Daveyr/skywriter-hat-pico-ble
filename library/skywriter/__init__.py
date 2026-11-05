@@ -320,14 +320,19 @@ def _do_poll():
         # d_seq = data[2]
         d_ident = data[3]
 
+        # The handlers index payload offsets from 0, so dispatch the frame
+        # minus the 4-byte header (size, flags, sequence, message ID) —
+        # otherwise every decoded field is shifted by 4 bytes.
+        payload = data[SW_HEADER_SIZE:]
+
         if d_ident == 0x91:
-            _handle_sensor_data(data)
+            _handle_sensor_data(payload)
 
         elif d_ident == 0x15:
-            _handle_status_info(data)
+            _handle_status_info(payload)
 
         elif d_ident == 0x83:
-            _handle_firmware_info(data)
+            _handle_firmware_info(payload)
 
         else:
             pass

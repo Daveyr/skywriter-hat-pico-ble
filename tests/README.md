@@ -37,8 +37,8 @@ temporarily*:
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
-without the ledger being updated. The `specs/README.md` deviation rows (D1
-off-by-4 header, D3 airwheel wrap, D4 touch early-return, D5 garbage dispatch,
+without the ledger being updated. The `specs/README.md` deviation rows (D3
+airwheel wrap, D4 touch early-return, D5 garbage dispatch,
 D6 firmware validity, D7 gesture attributes, D8 stale AGENTS.md gotcha, D9
 control-frame events) are therefore each guaranteed to flip its annotation to a
 hard assertion in the same change that closes it.
