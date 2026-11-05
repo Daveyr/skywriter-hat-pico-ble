@@ -178,6 +178,9 @@ def _handle_sensor_data(data):
         for i, gesture in enumerate(gestures):
             if d_gesture[0] == i + 1:
 
+                if gesture[0] == 'garbage' and callable(_on_garbage):
+                    _on_garbage()
+
                 if gesture[0] == 'flick' and callable(_on_flick):
                     _on_flick(gesture[1], gesture[2])
 

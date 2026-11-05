@@ -193,7 +193,6 @@
       "expect": {
         "canonical": [
           {"event": "gesture", "code": 1, "class": 0, "edge": false,
-           "omit_pending": {"deviation": "D5", "drivers": ["python"]},
            "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
         ],
         "hid": []
