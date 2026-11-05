@@ -160,6 +160,16 @@ docker run -it --rm \
    with a visible traceback (the design decision is recorded in the Done
    entry), and the transfer (TS) pin release moved into a `try/finally`.
    Closed as the last 3c item; 41 pytest tests; `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.12 commit `13f1698`): the mapping engine exists
+   (`pico-arduino/SkywriterHID/`) and its pointer model —
+   normalization/`GAIN`, sign, jump rejection + re-baseline, lift-off
+   gating, report cadence — is replay-asserted end-to-end through the real
+   C++ driver (the whole firmware signal chain in one host binary); new
+   fixtures F24/F25 + scenarios `pointer_move` (one coalesced +11/−2 move,
+   exercising GAIN, sign and cadence) and `pointer_lift_off_rebaseline`
+   (150 ms silence → fresh baseline, no cursor flight); `expect.hid` is
+   now a hard assertion for the eight armed scenarios, with the
+   touch/AirWheel/gesture scenarios attributed to P3.13–P3.15 by a lint.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -243,9 +253,7 @@ library both use). Python driver fixes go to `library/`.
 
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 
-- [ ] P3.12 Pointer model per `specs/hid_mapping.md` §3: normalization,
-      GAIN, sign, jump rejection + re-baseline, lift-off gating, report
-      cadence. Target `AC-MAP-01` (fixtures F01, F19).
+- [x] P3.12 → done, moved to the Done section below.
 - [ ] P3.13 Touch semantics per §4: press-once/repeat-inert, release after
       `TOUCH_RELEASE_MS`, tap/doubletap click semantics, multi-button per
       zone. Target `AC-MAP-02`, `AC-MAP-03`, `AC-MAP-07` release part
@@ -371,6 +379,63 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.12 — the mapping engine exists and its pointer model is fully
+  implemented and machine-asserted (commit `13f1698`). Specs rule out a
+  second copy of the mapping (hid_mapping.md §7), so the engine is ONE set
+  of source files — `pico-arduino/SkywriterHID/src/SkywriterHIDMapper.*`
+  (an Arduino-style library so the P3.16 firmware sketch links it) — fed
+  by every decoder's canonical events.
+  - The engine: `SkywriterHIDMapper` consumes canonical events (§2
+    vocabulary) with explicit arrival times (no `millis()` — the same
+    source runs on the Pico W and in the harness) and emits HID actions
+    through a `HIDMapperSink` (firmware → MouseBLE/KeyboardBLE wrapper;
+    harness → `hid_grammar` records). The §7 tunables live as named
+    constants in the header: `GAIN` 1/256, `JUMP_THRESHOLD` 8192,
+    `LIFT_OFF_MS` 100, `REPORT_INTERVAL_MS` 15 (initial; documented in
+    hid_mapping.md §3 rule 6 — the slowest common BLE HID connection
+    interval, so ≥60 Hz stays true on the slowest host; the firmware may
+    tighten it to the live interval, P3.18), `TOUCH_RELEASE_MS` 200,
+    `TAP_CLICK_MS` 50, `AIRWHEEL_INVERT` false, `AIRWHEEL_ENABLED` true.
+  - Pointer model (§3, AC-MAP-01) complete: first valid position (after
+    start, a lift-off or a jump) is a silent baseline; per-frame raw
+    deltas beyond ±8192 are discarded and re-baseline; deltas × GAIN
+    accumulate (float carry), +y north = cursor up, no pre-flip; move
+    reports coalesce to one per `REPORT_INTERVAL_MS` with deltas never
+    dropped; `finish()` flushes (shutdown = nothing lost). touch/tap/
+    doubletap, gesture and airwheel events are accepted and deliberately
+    silent until P3.13–P3.15 fill their §6 rows (each branch carries its
+    owning item).
+  - The harness: `tests/cpp/host_mapping_main.cpp` + `tests/adapters_mapping.py`
+    (adapter key `cpp_mapping`) chain the real C++ driver through the
+    engine in one host binary — the firmware signal chain exactly —
+    driven by `TICK <ms>` / `FRAME <hex>` / `FIN <ms>` instructions on a
+    ≤5 ms timeline (the sensor's 5 ms frame cadence when a scenario sets
+    no `time_gap_ms`), so cadence and lift-off run on simulated time.
+  - Fixture corpus: frames `F24_position_move` (+2560/−512 raw from F01,
+    a moderate normal-tracking delta) and `F25_position_move_next` (+256
+    = one GAIN unit); scenarios `pointer_move` ([F01,F24,F25] → exactly
+    ONE coalesced `move dx=11 dy=-2` record — sign, magnitude and the §3
+    rule 6 cadence assertion at once) and `pointer_lift_off_rebaseline`
+    ([F01,F24] with `time_gap_ms: 150` > `LIFT_OFF_MS` → F24 re-baselines,
+    nothing emitted; AC-MAP-07's baseline-reset half).
+  - Test arm: `test_scenario_hid_expectation_on_the_mapping_engine` makes
+    `expect.hid` a hard, ordered assertion for `MAPPING_ENGINE_ARMED` —
+    the four pointer scenarios plus garbage_gesture / gesture_in_progress
+    / status_ack / fw_version_valid (events that §6 maps to nothing must
+    provably stay silent on the HID side). `MAPPING_ENGINE_PENDING`
+    attributes the remaining scenarios to P3.13/P3.14/P3.15, and the
+    arm-coverage lint forces every new scenario to be classified.
+  - Scope decision (recorded for the following items): the HID replay
+    chain currently runs the **C++ driver → engine** only — the engine is
+    one implementation by spec, and decoder-level parity AC-MAP-09 is
+    already asserted on both drivers; the MicroPython port re-uses this
+    same engine via canonical events in P5.2.
+  Verified: `bash run_tests.sh` green 4/4; 44 pytest tests (41 + 3 new:
+  arm coverage lint, pending-attribution lint, per-scenario HID compare);
+  plus a throwaway `arduino-cli` smoke sketch including
+  `SkywriterHIDMapper.h` compiles clean for the RP2040 Pico W target
+  (`--library pico-arduino/SkywriterHID`).
 
 - P3.11d — the poll thread no longer dies on the FIRST I2C error (commit
   `8d4081d`): `library/skywriter/__init__.py`'s two `except IOError` handlers
