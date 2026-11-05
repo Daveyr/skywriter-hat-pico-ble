@@ -140,6 +140,14 @@ docker run -it --rm \
    expectation (code + class + edge-flick flag) is a hard assertion on both
    drivers; the `keys_pending` annotations and the D7 ledger row are gone.
    29 pytest tests; `run_tests.sh` green 4/4.
+   Update (2026-11-05, P3.11b commit): deviation D9 is closed — the
+   System_Status (0x15) and Fw_Version_Info (0x83) control frames are
+   canonical events (`system_status` / `firmware_info`) on both drivers, the
+   `status_ack` / `fw_version_valid` expectations are hard assertions with
+   the `omit_pending` annotations gone (and the stale `msg_id: 170` value
+   corrected to the datasheet's 0xA2 = 162 in the act), and the Arduino
+   `poll()` now reads whole frames (132-byte requests) so the 120-byte
+   version string arrives complete. 30 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -217,18 +225,20 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.9 → done, moved to the Done section below.
 - [x] P3.10 → done, moved to the Done section below.
 - [x] P3.11 → done, moved to the Done section below.
-- [ ] P3.11b Deviation D9 — surface control-frame results as canonical
-      events (discovered by P3.2): Python `_handle_status_info` /
-      `_handle_firmware_info` parse their payload and emit a record the
-      harness adapter can capture (System_Status: Set_Runtime id + error
-      code; Fw_Version: FwValid flag + NUL-stripped version string — validity
-      semantics itself is P3.6/D6), and Arduino `poll()` cases `0x15`/`0x83`
-      call new optional callbacks (`onSystemStatus`, `onFirmwareVersion`).
-      Then, in the same commit: remove the D9 row from `specs/README.md` and
-      drop the `omit_pending` annotations on the `status_ack` /
-      `fw_version_valid` scenarios in `specs/fixtures/manifest.json` — the
-      realization checks re-arm the assertions automatically (see
-      `tests/README.md`, "Canonical grammar").
+- [x] P3.11b → done, moved to the Done section below.
+- [ ] P3.11c Control-frame reads on real hardware (discovered by P3.11b,
+      low priority): the Raspberry Pi Python driver's `_do_poll()` still
+      reads a fixed 26 bytes per poll, so on a real Raspberry Pi an
+      Fw_Version_Info frame (132 bytes at the wire) can never be fully
+      received — `_handle_firmware_info` would see only the first ~14
+      characters of the string, without its NUL terminator. Nothing breaks
+      today because the Python driver never *asks* for the version (it never
+      sends Request_Message 0x06) and System_Status (16-byte frame) fits the
+      read. If a consumer ever wants the live version through this driver,
+      extend `_do_poll` with size-aware reads (or send Request_Message 0x06
+      and size the read to the frame's Size byte). The P3.16 firmware and
+      the P4.x probes are unaffected (see the P4.1 note about the 132-byte
+      Arduino read).
 
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 
@@ -305,7 +315,12 @@ item names what needs the Pico W plugged in.
 
 - [ ] P4.1 `hw/serial_probe.py` (host, needs `pyserial`): flash a test sketch
       via `pico-arduino/flash.sh`, capture the USB serial port, assert boot
-      banner, sensor frame streaming and framing.
+      banner, sensor frame streaming and framing. Hardware-check note from
+      P3.11b: the shared Arduino library's `poll()` now issues 132-byte I2C
+      reads (its former 32-byte request truncated the firmware-version
+      frame); the interface guide only promises that reading a whole message
+      works, so confirm on hardware that sensor-frame streaming is unaffected
+      when the host clocks more bytes than the current frame contains.
 - [ ] P4.2 `hw/ble_hid_probe.py` (host, needs `bleak` + the host's Bluetooth
       radio): automate scan/GATT/pairing/services — target `AC-BLE-01`,
       `AC-BLE-02`, `AC-BLE-03`.
@@ -348,6 +363,81 @@ attribute table limit).
 
 ## Done
 
+- P3.11b — Deviation D9 closed (commit `d1db8f3`): the two control frames
+  beside Sensor_Data_Output are surfaced as canonical events on BOTH drivers,
+  and the `status_ack` / `fw_version_valid` scenarios are hard assertions
+  with no tolerance left (their `omit_pending` annotations are gone, the D9
+  row is gone from `specs/README.md`). Parts:
+  - **System_Status (0x15)** — the sensor's acknowledge to a control command,
+    decoded per Interface.pdf §4.1 / §3.6 Table 3-8 (payload: MsgID,
+    MaxCmdSize, 16-bit little-endian ErrorCode). Canonical
+    `{"event": "system_status", "msg_id", "error"}`:
+    - `library/skywriter/__init__.py`: `_handle_status_info` now parses the
+      real payload (it was `pass`) — module state `system_status` /
+      `system_status_error` set, optional callback `_on_system_status` called
+      with `(msg_id, error)`, plus the new public decorator
+      `system_status()` (same `setup()`-on-register pattern as flick etc.).
+    - `arduino/Skywriter/skywriter.cpp`: the `0x15` `poll()` case (was
+      "// Unimplemented") calls the new private `handle_status_info`, which
+      dispatches the new optional public callback
+      `onSystemStatus(void (*)(unsigned char, unsigned int))` (registered via
+      `Skywriter.onSystemStatus(...)`), the C++ counterpart of the
+      decorator.
+  - **Fw_Version_Info (0x83)** — the sensor's firmware-version report
+    (Interface.pdf §4.3). Canonical
+    `{"event": "firmware_info", "fw_valid", "version"}`, **version
+    NUL-stripped** (the 120-byte field is NUL-padded; the canonical record
+    carries exactly the readable string), and only FwValid == 0xAA emits —
+    the Python driver raises for every other value (the D6 rule, P3.6), so
+    emitting nothing invalid keeps AC-MAP-09 parity:
+    - `library/skywriter/__init__.py`: `_handle_firmware_info` strips at the
+      first NUL instead of printing raw padding bytes; module state
+      `fw_valid` / `fw_version` set for every report, callback
+      `_on_firmware_version` fired for valid ones, plus the new public
+      decorator `fw_version()`.
+    - `arduino/Skywriter/skywriter.cpp`: the `0x83` case calls the new
+      private `handle_firmware_info` (validity gate at 0xAA, NUL-stripped
+      copy of the version field bounded by `SW_FW_VERSION_FIELD_SIZE`),
+      dispatching the new `onFirmwareVersion(void (*)(unsigned char,
+      const char*))`.
+  - **Whole-frame reads on the Arduino driver** (a defect the new assertion
+    exposed): `poll()` used to request only 32 bytes per read, truncating the
+    132-byte Fw_Version_Info frame to ~20 characters of version string — it
+    could never have satisfied the fixture. It now requests
+    `SW_MAX_FRAME_SIZE` (new `skywriter.h` constant, 132 bytes = the longest
+    sensor message, §3.5.2) in one read, and the payload copy loop is bounded
+    by the buffer size (the old loop trusted the read length exactly filling
+    the 32-byte `command_buffer` — a hazard that must not return now that the
+    request is larger). Real-hardware verification of the larger request is
+    folded into P4.1.
+  - **Harness**: `tests/cpp/host_decoder_main.cpp` registers both callbacks
+    and prints `EV SYSTEMSTATUS <msg_id> <error>` and
+    `EV FWVERSION <fw_valid> <version string>`; `tests/adapters_cpp.py`
+    parses them (the version string **contains a literal space** — the ISO
+    build timestamp "2013/11/08 13:03:00" — so it is parsed as the remainder
+    of the line, never as one whitespace token); `tests/adapters_python.py`
+    captures `system_status` records from the callback and `firmware_info`
+    records from the callback with `fw_valid` snapshotted from the driver's
+    module state (the same globals-snapshot trick the gesture records use);
+    `tests/canonical.py` gained `canonicalize_control_record` feeding both
+    converters. Fresh-state reset extended with the four new Python state
+    variables.
+  - **Spec-data bug found and fixed in the act** (the previously-never-checked
+    expectation was wrong): the `status_ack` manifest entry claimed
+    `msg_id: 170`, but that decimal belongs to `0xAA` (the FwValid byte); the
+    datasheet decodes it as `0xA2 = 162` (Table 3-8). Corrected to 162 with
+    the note explaining exactly how the stale value arose. Also:
+    `specs/hid_mapping.md` §2's canonical-event table now lists both control
+    events (the machine-readable grammar was already in `tests/canonical.py`).
+  - **Doc/docstring hygiene**: `tests/test_firmware_info.py`'s stale F17 size
+    claim fixed (132 bytes, not 24) and two new pins added (valid report sets
+    `fw_valid`/`fw_version` state + fires the handler with the NUL-stripped
+    string — the adapter's snapshot dependency); `tests/README.md` and the
+    `test_harness.py` / `test_scenarios.py` docstrings no longer list D9 as
+    open (D8 remains).
+  - Verified: 30 pytest tests green (29 + 1 callback pin);
+    `bash run_tests.sh` green 4/4 (fixture corpus, library unit tests, replay
+    suite, all three example sketches compile with the modified library).
 - P3.11 — Deviation D7 closed (commit `32076e1`): the **Arduino** driver now
   decodes the full 32-bit GestureInfo word in exactly the way the Python
   driver has since P3.7, so both drivers carry the gesture attributes and
