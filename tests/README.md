@@ -31,16 +31,17 @@ temporarily*:
 - `omit_pending: {deviation, drivers}` — the listed drivers may omit the event
   while that `specs/README.md` deviation row is open;
 - `keys_pending: {deviation, keys, drivers}` — the listed drivers may leave
-  those keys out (attributes a driver still discards; e.g. D7's gesture
-  class/edge on the Arduino driver — the Python side supplies them since
-  P3.7).
+  those keys out (attributes a driver still discards). Last user was D7's
+  gesture class/edge gate on the Arduino driver (closed 2026-11-05 with P3.11,
+  alongside the Python half closed with P3.7): both drivers now decode the
+  full GestureInfo word, so gesture events carry code/class/edge equally and
+  no annotation of this kind is open at the moment.
 
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
 without the ledger being updated. The `specs/README.md` deviation rows —
-D7 (gesture
-attributes, Arduino side), D8 (stale
+D8 (stale
 AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
 to flip its annotation to a hard assertion in the same change that closes it.
 (D3, the Arduino AirWheel wrap, was closed 2026-11-05 the same way: commit
@@ -55,9 +56,11 @@ new `touch_two_zones` scenario (F23) hard-asserts a two-touch frame on both
 drivers, and `touch_with_position_and_airwheel` hard-asserts its +90° airwheel
 event on both drivers. D6, firmware validity, was closed 2026-11-05 without needing a fixture
 annotation: `_handle_firmware_info`'s now-spec-correct FwValid handling is
-pinned directly in `tests/test_firmware_info.py`. D7's Python half was closed
-2026-11-05 the same way — the Python gesture events now carry class/edge and
-the `keys_pending` annotations cover only `cpp`. D2, the Arduino
+pinned directly in `tests/test_firmware_info.py`. D7, gesture class
+(bits 12-15) / edge-flick flag (bit 16), was closed 2026-11-05 the same way:
+the Python driver (P3.7) and the Arduino driver (P3.11) both decode the full
+32-bit GestureInfo word, and the six gesture scenarios now hard-assert
+code/class/edge on both drivers. D2, the Arduino
 Set_Runtime_Parameter out-of-bounds write past its 15-byte command payloads,
 was closed 2026-11-05 without a fixture annotation either: commit `c6aecc7`
 (the pre-loop revert of `arduino/Skywriter/` to the pristine upstream library)

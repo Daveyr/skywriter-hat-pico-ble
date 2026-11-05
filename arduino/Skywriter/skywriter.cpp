@@ -115,7 +115,35 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
       
       if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_GESTURE && data[SW_PAYLOAD_GESTURE] > 0){
         // Valid gesture
-        this->last_gesture = data[SW_PAYLOAD_GESTURE];
+        //
+        // GestureInfo is a 32-bit little-endian word (Interface.pdf §4.5,
+        // Table 4-10): bits 0-7 = gesture code (1 garbage, 2-5 flicks, 6/7
+        // circles), bits 12-15 = gesture class (1 flick, 2 circle), bit 16
+        // = edge-flick flag, bit 31 = recognition in progress. Recognition
+        // in progress ("hand moving, gesture not yet decided") frames carry
+        // code 0, so the code>0 test above already emits nothing for them,
+        // exactly as hid_mapping.md §2 requires — that part of the branch
+        // is unchanged.
+        // Deviation D7 (fix item P3.11): the old code read only byte 0 and
+        // discarded class/edge; this decode now mirrors the Python driver's
+        // reference implementation (library/skywriter/__init__.py, P3.7).
+        uint32_t gesture_word =
+              (uint32_t)data[SW_PAYLOAD_GESTURE]
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 1] << 8
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 2] << 16
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 3] << 24;
+
+        // The attributes become driver state (like x/y/z), mirroring the
+        // Python driver's `gesture` / `gesture_class` / `gesture_edge`
+        // globals, so a registered handler reads them alongside
+        // `last_gesture`. They are set BEFORE the dispatch, so the handler
+        // and the replay harness (tests/cpp/host_decoder_main.cpp prints
+        // them from inside its onGesture callback) always see the values of
+        // the gesture being dispatched.
+        this->last_gesture       = gesture_word & 0xFF;          // bits 0-7: code
+        this->last_gesture_class = (gesture_word >> 12) & 0xF;   // bits 12-15: class
+        this->last_gesture_edge  = gesture_word & 0x10000;       // bit 16: edge flick
+
         if( this->handle_gesture != NULL ) this->handle_gesture(this->last_gesture);
       }
       

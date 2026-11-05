@@ -81,7 +81,8 @@ class PythonDriverAdapter(ReplayAdapter):
         # Capture handlers in the driver's own callback vocabulary. Gesture
         # handlers snapshot the driver's attribute globals (gesture class
         # and edge-flick flag, decoded from the GestureInfo word right
-        # before dispatch — deviation D7's Python half, fix item P3.7).
+        # before dispatch — deviation D7's Python half, closed with fix
+        # item P3.7; the Arduino driver decodes the same word since P3.11).
         sky._on_move = lambda x, y, z: self.records.append(
             {'kind': 'move', 'x': x, 'y': y, 'z': z})
         sky._on_flick = lambda src, dst: self._gesture_record(

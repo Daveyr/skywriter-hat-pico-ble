@@ -31,11 +31,13 @@ keys (never asserted as values):
     "keys_pending":  {"deviation": "D7", "keys": ["class", "edge"],
                       "drivers": ["cpp"]}
          While open, the listed drivers may leave those keys out of their
-         event record (attributes that driver still discards — e.g. the
-         Arduino driver's gesture class/edge; the Python driver carries
-         them since P3.7). Whatever the decoder *does* provide must
-         already match; the annotation must be dropped when the ledger row
-         goes.
+         event record (attributes that driver still discards). Whatever the
+         decoder *does* provide must already match; the annotation must be
+         dropped when the ledger row goes. Last user: D7's gesture
+         class/edge gate on the Arduino driver, closed 2026-11-05 with P3.11
+         (the Python side had carried class/edge since P3.7) — both drivers
+         now decode the full 32-bit GestureInfo word and gesture events
+         assert code/class/edge equally everywhere.
     "note":          short human context (not asserted, not checked)
 '''
 
@@ -120,7 +122,11 @@ def canonicalize_cpp_record(record):
         event, zone = TOUCH_CODES[record['code']]
         return {'event': event, 'zone': zone}
     if kind == 'gesture':
-        return {'event': 'gesture', 'code': record['code']}
+        # Same shape as the Python records: the Arduino driver decodes the
+        # full 32-bit GestureInfo word too (P3.11), so the code/class/edge
+        # triple travels with every gesture record on both drivers.
+        return {'event': 'gesture', 'code': record['code'],
+                'class': record['class'], 'edge': record['edge']}
     if kind == 'airwheel':
         return {'event': 'airwheel', 'degrees': float(record['degrees'])}
     raise ValueError(f'unknown cpp record kind: {kind!r}')

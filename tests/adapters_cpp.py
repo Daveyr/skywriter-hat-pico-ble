@@ -12,7 +12,15 @@ parsed into native records:
 
 - ``{"kind": "move", "x"|..|...: int}``      raw 16-bit position values
 - ``{"kind": "touch_code", "code": int}``   Arduino touch code (see skywriter.h)
-- ``{"kind": "gesture", "code": int}``      gesture code (1 garbage, 2-5 flicks, 6-7 circles)
+- ``{"kind": "gesture", "code": int, "class": int, "edge": bool}``
+                                             gesture code (1 garbage, 2-5
+                                             flicks, 6-7 circles) with the
+                                             GestureInfo attributes decoded
+                                             from the full 32-bit word (P3.11,
+                                             closing the Arduino half of
+                                             deviation D7): class = bits 12-15
+                                             (0 garbage, 1 flick, 2 circle),
+                                             edge = bit 16 edge-flick flag
 - ``{"kind": "airwheel", "degrees": float}`` rotation delta in degrees
                                              (quantized to 11.25-degree
                                              sensor steps)
@@ -152,7 +160,12 @@ class CppDecoderAdapter(ReplayAdapter):
             # record name differs from the Python adapter's named zones.
             return {'kind': 'touch_code', 'code': int(parts[2])}
         if kind == 'gesture':
-            return {'kind': 'gesture', 'code': int(parts[2])}
+            # `EV GESTURE <code> <class> <edge>` — the driver decodes the
+            # full 32-bit GestureInfo word (P3.11; class is bits 12-15,
+            # edge the bit-16 edge-flick flag, both printed by the host
+            # decoder shim from the driver's public state).
+            return {'kind': 'gesture', 'code': int(parts[2]),
+                    'class': int(parts[3]), 'edge': bool(int(parts[4]))}
         if kind == 'airwheel':
             # %.2f printed degrees: exact for the 11.25-degree quantization
             # of the AirWheel decoder (and for the Python parity compare,

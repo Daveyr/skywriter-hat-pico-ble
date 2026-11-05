@@ -20,7 +20,7 @@ adapter) and checked against its machine-checkable expectations:
   a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
   closed 2026-11-05).
 
-Known-red decoder defects (D7–D9, specs/README.md) are annotated in the
+Known-red decoder defects (D8, D9 — specs/README.md) are annotated in the
 manifest, never swallowed silently by these tests.
 '''
 

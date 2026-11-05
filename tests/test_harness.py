@@ -9,11 +9,12 @@ These prove the mechanism the decoder/mapping work items will build on:
 - plumbing sanity pins (what already matches the spec today): position
   decode (F01), flick dispatch (F02), tap dispatch (F09) on both adapters.
 
-Spec-behaviour assertions for the known-red decoder deviations (D7–D9)
-come
-with the fix items P3.3–P3.11 and the structured naming of P3.2 — this file
+Spec-behaviour assertions for the known-red decoder deviations (D8, D9) come
+with the fix items P3.11b–P3.19 and the structured naming of P3.2 — this file
 deliberately asserts only what is true today. (D4, touch every-set-bit
-dispatch, was closed 2026-11-05 with P3.10.)
+dispatch, was closed 2026-11-05 with P3.10; D7, the Arduino driver's gesture
+class/edge attributes, was closed 2026-11-05 with P3.11 — the C++ flick pin
+below now asserts the full record.)
 '''
 
 import time
@@ -148,7 +149,12 @@ def test_cpp_adapter_position_values(cpp_adapter):
 def test_cpp_adapter_flick_dispatch(cpp_adapter):
     scenario = fixtures.scenario(fixtures.load_manifest(), 'flick_west_east')
     result = runner.replay(scenario, cpp_adapter)
-    assert result.records == [{'kind': 'gesture', 'code': 2}]  # SW_FLICK_WEST_EAST
+    # F02's gesture word 02 10 02 00: code 2 (SW_FLICK_WEST_EAST), class 1
+    # (flick), edge flag clear, bit 17 reserved and ignored — the full
+    # GestureInfo decode the driver carries since P3.11.
+    assert result.records == [{
+        'kind': 'gesture', 'code': 2, 'class': 1, 'edge': False,
+    }]
 
 
 def test_cpp_adapter_tap_dispatch(cpp_adapter):

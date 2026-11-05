@@ -12,6 +12,7 @@
     "2026-11-05 revision (P3.14a settled): the first AirWheel-valid frame after driver start or after any AirWheel-invalid stretch is a silent baseline (emits nothing) — the counter is free-running, so it cannot be read against a stale reference. F20 (counter 00) was added ahead of F18 in touch_with_position_and_airwheel to keep its +90 deg expectation under the settled rule.",
     "2026-11-05 revision (P3.5b): circle gestures (wire codes 6/7) are now dispatched by the Python driver (circle(direction) decorator; deviation D10 closed). F21/F22 give the corpus its first AirWheel-disabled mask (bit 3 off, 0x0003): only fields up to GestureInfo are present, so the fixed offsets before it stay valid.",
     "2026-11-05 revision (P3.7): the Python driver now decodes the full 32-bit GestureInfo word and carries gesture class (bits 12-15) and edge-flick flag (bit 16) onto every gesture event; the keys_pending annotations narrowed to 'cpp' until the Arduino driver gets the same decode (fix item P3.11, deviation D7). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
+    "2026-11-05 revision (P3.11): the Arduino driver decodes the full 32-bit GestureInfo word too, so every gesture expectation in this manifest is now a hard assertion on BOTH drivers (deviation D7 closed; the keys_pending annotations are gone). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
     "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout."
   ],
   "frames": {
@@ -160,8 +161,7 @@
       "frames": ["F02_flick_west_east"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 2, "class": 1, "edge": false,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 2, "class": 1, "edge": false}
         ],
         "hid": [
           {"channel": "consumer", "action": "press", "usage": 181}
@@ -174,8 +174,7 @@
       "frames": ["F03_flick_east_west"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 3, "class": 1, "edge": false,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 3, "class": 1, "edge": false}
         ],
         "hid": [
           {"channel": "consumer", "action": "press", "usage": 182}
@@ -187,8 +186,7 @@
       "frames": ["F04_edge_flick_east_west"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 3, "class": 1, "edge": true,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 3, "class": 1, "edge": true}
         ],
         "hid": [
           {"channel": "consumer", "action": "press", "usage": 182}
@@ -209,8 +207,7 @@
       "frames": ["F06_garbage_gesture"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 1, "class": 0, "edge": false,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 1, "class": 0, "edge": false}
         ],
         "hid": []
       },
@@ -221,8 +218,7 @@
       "frames": ["F21_circle_cw"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 6, "class": 2, "edge": false,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 6, "class": 2, "edge": false}
         ],
         "hid": [
           {"channel": "consumer", "action": "press", "usage": 233}
@@ -235,8 +231,7 @@
       "frames": ["F22_circle_ccw"],
       "expect": {
         "canonical": [
-          {"event": "gesture", "code": 7, "class": 2, "edge": false,
-           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["cpp"]}}
+          {"event": "gesture", "code": 7, "class": 2, "edge": false}
         ],
         "hid": [
           {"channel": "consumer", "action": "press", "usage": 234}

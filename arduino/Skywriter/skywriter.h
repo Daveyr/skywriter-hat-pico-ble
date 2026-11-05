@@ -70,6 +70,15 @@ class _SkyWriter
     void onGesture( void (*)(unsigned char) );
     void onXYZ( void (*)(unsigned int, unsigned int, unsigned int) );
     unsigned char last_gesture, last_touch;
+    // Attributes of the last recognized gesture, decoded from the full
+    // 32-bit GestureInfo word (Interface.pdf §4.5, Table 4-10) — the C++
+    // counterparts of the Python driver's `gesture_class` / `gesture_edge`
+    // globals (fix item P3.11). Handlers read them alongside `last_gesture`
+    // exactly like the Python driver's module state. Deviation D7: the old
+    // code kept only `last_gesture` (GestureInfo byte 0) and discarded
+    // these.
+    unsigned char last_gesture_class;  // bits 12-15: 0 garbage, 1 flick, 2 circle
+    bool last_gesture_edge;            // bit 16: edge-flick flag
     unsigned int  x, y, z;
     // Accumulated AirWheel rotation in degrees (clamped 0..1000, mirroring
     // the Python driver's `rotation` global — the P3.4 reference).

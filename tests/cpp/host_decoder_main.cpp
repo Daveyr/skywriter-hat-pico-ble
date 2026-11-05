@@ -8,7 +8,17 @@
 // of the driver's callbacks print one event line per emission:
 //
 //   EV MOVE <x> <y> <z>       onXYZ, raw 16-bit position values
-//   EV GESTURE <code>         onGesture, code per skywriter.h (1 garbage, 2-5 flicks, 6-7 circles)
+//   EV GESTURE <code> <class> <edge>
+//                             onGesture, with the GestureInfo attributes the
+//                             driver decodes from the full 32-bit word (P3.11):
+//                             code per skywriter.h (1 garbage, 2-5 flicks,
+//                             6-7 circles), class = GestureInfo bits 12-15
+//                             (0 garbage, 1 flick, 2 circle), edge = bit 16
+//                             (0/1 edge-flick flag). The driver keeps them
+//                             as public state (last_gesture_class /
+//                             last_gesture_edge), the C++ counterpart of the
+//                             Python driver's `gesture_class`/`gesture_edge`
+//                             globals, and they are set before dispatch.
 //   EV TOUCH <code>           onTouch, code per skywriter.h (see below)
 //   EV AIRWHEEL <degrees>     onAirwheel, rotation delta in degrees
 //                             (float — one sensor step = 11.25 degrees)
@@ -41,7 +51,15 @@ static void on_touch(unsigned char code) {
 }
 
 static void on_gesture(unsigned char code) {
-  printf("EV GESTURE %u\n", static_cast<unsigned>(code));
+  // The driver's gesture attributes (last_gesture_class /
+  // last_gesture_edge, decoded from the full 32-bit GestureInfo word) are
+  // set before the dispatch, so reading them inside this callback snapshots
+  // the attributes of exactly the gesture being reported — the same trick
+  // the Python adapter uses on the driver's module globals (deviation D7's
+  // Arduino half closed with P3.11).
+  printf("EV GESTURE %u %u %d\n", static_cast<unsigned>(code),
+         static_cast<unsigned>(Skywriter.last_gesture_class),
+         Skywriter.last_gesture_edge ? 1 : 0);
 }
 
 static void on_airwheel(float degrees) {
