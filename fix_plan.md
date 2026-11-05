@@ -126,6 +126,15 @@ docker run -it --rm \
   with no tolerance left (the `omit_pending` D3 annotation is gone from
   `specs/fixtures/manifest.json` and the D3 row is gone from
   `specs/README.md`). 29 pytest tests; `run_tests.sh` green 4/4.
+   Update (2026-11-05, P3.10 commit): deviation D4 is closed — every set
+   touch bit now dispatches on **both** drivers (the Arduino touch `return`
+   and the Python touch `break` are gone; the Arduino driver decodes
+   AirWheel in the same frame again; the Python repeat-limiter now tracks
+   last firing per zone so same-frame zones don't suppress each other), the
+   `touch_with_position_and_airwheel` scenario hard-asserts its +90°
+   airwheel event on both drivers, new fixture F23 (`touch_two_zones`
+   scenario) covers a two-touch frame. The D4 row is gone from
+   `specs/README.md`. 30 pytest tests; `run_tests.sh` green 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -201,9 +210,7 @@ library both use). Python driver fixes go to `library/`.
 
 - [x] P3.8 → done, moved to the Done section below.
 - [x] P3.9 → done, moved to the Done section below.
-- [ ] P3.10 Deviation D4 — touch decode early-`return`s after the first (and
-      only highest-bit) touch; must process every set bit and continue
-      decoding AirWheel/xyz in the same frame.
+- [x] P3.10 → done, moved to the Done section below.
 - [ ] P3.11 Deviation D7 — same gesture-attribute fix as P3.7.
 - [ ] P3.11b Deviation D9 — surface control-frame results as canonical
       events (discovered by P3.2): Python `_handle_status_info` /

@@ -61,8 +61,12 @@ word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
   event. Code 1 (garbage) produces a `gesture(1, …)` event which the mapping
   table maps to *nothing*.
 - **All set touch bits** in a frame produce their events; a frame may carry
-  touch + position + airwheel simultaneously and all must be processed
-  (deviation D4 shows the Arduino driver dropping fields after the first).
+  touch + position + airwheel simultaneously and all must be processed.
+  (Both drivers were fixed here 2026-11-05, fix item P3.10 / former deviation
+  D4: the Arduino driver used to `return` after the first touch bit — which
+  also skipped the AirWheel decode of the same frame — and the Python driver
+  used to `break` out of the touch loop after the first bit. Fixture
+  `touch_two_zones` / F23 hard-asserts a two-touch frame on both drivers.)
 - **Sensor sampling:** frames arrive every 5 ms while the hand is tracked
   (Interface.pdf §3.6.4).
 

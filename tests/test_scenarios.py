@@ -17,9 +17,10 @@ adapter) and checked against its machine-checkable expectations:
   mapping-engine items P3.12–P3.15,
 - cross-driver parity — where both decoders emit an event, the canonical
   streams must agree (AC-MAP-09), except for event omissions attributable to
-  a deviation annotated for exactly one driver (e.g. D4's airwheel drop).
+  a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
+  closed 2026-11-05).
 
-Known-red decoder defects (D4, D7–D9, specs/README.md) are annotated in the
+Known-red decoder defects (D7–D9, specs/README.md) are annotated in the
 manifest, never swallowed silently by these tests.
 '''
 

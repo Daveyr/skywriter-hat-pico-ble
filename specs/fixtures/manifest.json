@@ -124,6 +124,11 @@
       "file": "F22_circle_ccw.hex",
       "source": "vendor pattern (Interface.pdf Table A-3 'Counter Clockwise Circle' trace rows, repacked; see the frame-layout note in fixtures/README.md)",
       "desc": "Circle counter-clockwise recognized: GestureInfo word 07 20 00 00 (code 7, class bits 12-15 = 2). Same AirWheel-disabled mask 0x0003 as F21; recognized word constructed from Table 4-10 GestureInfo bits as above."
+    },
+    "F23_touch_two_zones": {
+      "file": "F23_touch_two_zones.hex",
+      "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+      "desc": "Two touch electrodes set in one frame: Touch Center (bit 4) + Touch West (bit 1) — TouchInfo word 12 00 00 00. Exercises all-set-bits touch dispatch (§2; fix item P3.10 / deviation D4)."
     }
   },
   "scenarios": [
@@ -282,6 +287,20 @@
       "note": "Two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]."
     },
     {
+      "name": "touch_two_zones",
+      "frames": ["F23_touch_two_zones"],
+      "expect": {
+        "canonical": [
+          {"event": "touch", "zone": "center"},
+          {"event": "touch", "zone": "west"}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "button", "button": "left", "state": "down"}
+        ]
+      },
+      "note": "All set touch bits in one frame produce their events on BOTH drivers (hid_mapping.md §2; D4 closed by P3.10 2026-11-05: the Arduino driver's early return and the Python driver's break after the first bit are gone). Scan order is highest bit first, so center (bit 4) precedes west (bit 1). HID side: touch(center) hold presses the left button; touch(west) hold has no §6 row (only tap(west) maps to middle click), so nothing else — the button record arms with the mapping engine (P3.13)."
+    },
+    {
       "name": "airwheel_quarter_turn_cw",
       "frames": ["F11_airwheel_step00", "F12_airwheel_step08", "F13_airwheel_step10"],
       "expect": {
@@ -317,8 +336,7 @@
           {"event": "position", "x": 500, "y": 1000, "z": 200},
           {"event": "touch", "zone": "center"},
           {"event": "airwheel", "degrees": 90,
-           "omit_pending": {"deviation": "D4", "drivers": ["cpp"]},
-           "note": "F20 (counter 00) silently re-baselines the free-running counter, so F18's 0x08 is +8 steps = +90 deg [AC-MAP-04]; the cpp driver still drops this airwheel decode (D4 touch early-return, fix item P3.10)"}
+           "note": "F20 (counter 00) silently re-baselines the free-running counter, so F18's 0x08 is +8 steps = +90 deg [AC-MAP-04]. Hard-asserted on both drivers since D4 closed (P3.10, 2026-11-05): the touch decode no longer skips the AirWheel field."}
         ],
         "hid": [
           {"channel": "mouse", "action": "button", "button": "left", "state": "down"},

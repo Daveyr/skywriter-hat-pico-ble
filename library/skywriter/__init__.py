@@ -269,18 +269,28 @@ def _handle_sensor_data(data):
                         _on_touch_last[action[0]] = {}
                         handle_touch = True
 
-                    if 'all' not in _on_touch_last[action[0]].keys():
-                        _on_touch_last[action[0]]['all'] = None
+                    # The repeat limiter tracks the last firing PER ZONE: a
+                    # frame may carry several set electrodes at once (every
+                    # one dispatches — see the loop note), and two zones firing
+                    # in the same frame must not suppress each other through a
+                    # shared timestamp (P3.10; the shared 'all' slot was
+                    # harmless only while the loop dispatched at most one
+                    # action per frame).
+                    if action[1] not in _on_touch_last[action[0]].keys():
+                        _on_touch_last[action[0]][action[1]] = None
                         handle_touch = True
 
-                    elif (millis() - _on_touch_last[action[0]]['all']) >= 1000.0 / _on_touch_repeat[action[0]]['all']:
+                    elif (millis() - _on_touch_last[action[0]][action[1]]) >= 1000.0 / _on_touch_repeat[action[0]]['all']:
                         handle_touch = True
 
                     if callable(_on_touch[action[0]]['all']) and handle_touch:
                         _on_touch[action[0]]['all'](action[1])
-                        _on_touch_last[action[0]]['all'] = millis()
+                        _on_touch_last[action[0]][action[1]] = millis()
 
-                break
+                # No break: EVERY set touch bit dispatches (hid_mapping.md §2
+                # "all set touch bits in a frame produce their events"; the
+                # old `break` dropped every touch after the first — the
+                # Python half of deviation D4, fix item P3.10).
             comp = comp >> 1
 
     if d_configmask & SW_DATA_AIRWHEEL and d_sysinfo & 0b00000010:

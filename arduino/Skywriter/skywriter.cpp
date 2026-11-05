@@ -120,7 +120,15 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
       }
       
       if ( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_TOUCH ){
-        // Valid touch
+        // Valid touch. TouchInfo bits 0-14 are the touch / tap / doubletap
+        // electrodes; this scan runs highest bit first (bit 14 = doubletap
+        // center ... bit 0 = touch south), which is exactly the scan order
+        // of the SW_* code constants in skywriter.h. EVERY set bit is
+        // dispatched — a frame may carry several electrodes at once, and
+        // hid_mapping.md §2 requires "all set touch bits in a frame produce
+        // their events" (deviation D4: the old code returned after the
+        // first match, which also skipped every field after TouchInfo,
+        // including the AirWheel decode below).
         uint16_t touch_action = data[SW_PAYLOAD_TOUCH+1] << 8 | data[SW_PAYLOAD_TOUCH];
         uint16_t comp = 1 << 14;
         uint8_t x;
@@ -128,7 +136,6 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
           if( touch_action & comp ){
             this->last_touch = x;
             if( this->handle_touch != NULL ) this->handle_touch(this->last_touch);
-            return;
           }
           comp = comp >> 1;
         }

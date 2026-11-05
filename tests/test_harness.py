@@ -9,10 +9,11 @@ These prove the mechanism the decoder/mapping work items will build on:
 - plumbing sanity pins (what already matches the spec today): position
   decode (F01), flick dispatch (F02), tap dispatch (F09) on both adapters.
 
-Spec-behaviour assertions for the known-red decoder deviations (D4, D7–D9)
+Spec-behaviour assertions for the known-red decoder deviations (D7–D9)
 come
 with the fix items P3.3–P3.11 and the structured naming of P3.2 — this file
-deliberately asserts only what is true today.
+deliberately asserts only what is true today. (D4, touch every-set-bit
+dispatch, was closed 2026-11-05 with P3.10.)
 '''
 
 import time
