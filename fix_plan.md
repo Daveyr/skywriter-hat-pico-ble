@@ -154,6 +154,12 @@ docker run -it --rm \
    instead of being truncated at the fixed 26-byte read; 4 new `_do_poll`
    pins, 34 pytest tests; `run_tests.sh` 4/4. New open item P3.11d (the
    polling thread stops on the first I2C error).
+   Update (2026-11-05, P3.11d commit `8d4081d`): the background poll
+   thread no longer stops on the first I2C error — the documented
+   10-error grace actually works now, past it the raise ends the thread
+   with a visible traceback (the design decision is recorded in the Done
+   entry), and the transfer (TS) pin release moved into a `try/finally`.
+   Closed as the last 3c item; 41 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -365,6 +371,32 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.11d — the poll thread no longer dies on the FIRST I2C error (commit
+  `8d4081d`): `library/skywriter/__init__.py`'s two `except IOError` handlers
+  in `_do_poll()` now delegate to a new shared `_poll_i2c_error()` helper —
+  it increments the consecutive-error counter and returns `True` while the
+  grace holds, so `AsyncWorker.run()`'s "`False` means abort" contract keeps
+  looping (one error was ONE bad cycle, not a stop order), and past 10
+  consecutive failures it raises the existing documented exception — so the
+  dead thread announces itself with a traceback instead of vanishing.
+  Explicit design decision (the open question in the item): stopping a
+  persistently dead-bus worker via the raise, NOT via
+  `stop_event.set()` from inside `_do_poll` — a visible traceback beats both
+  a silent death and a second race-prone shutdown path, clean
+  `stop()`/`_stop_poll()` shutdown stays the caller's facility, and nothing
+  else reads `stop_event` from the poll path. Also hardened: the transfer
+  (TS) release moved into a `try/finally`, so an error exit no longer leaves
+  the sensor's data buffers pinned (previously a mid-transfer error kept the
+  transfer line driven low forever). Typo fixes on the way out: the very old
+  "encoutered nore than 10" message now says "encountered more than 10".
+  Tests: new `tests/test_poll_thread.py` — 7 pins (first error returns True,
+  10-in-grace vs 11th raising, success resets the grace, mid-frame error
+  skips dispatch, error releases the TS pin pulled-up-as-input, a real
+  `AsyncWorker` thread survives three simulated failures and still
+  dispatches the fixture frame, and grace exhaustion dies visibly via
+  `threading.excepthook`). Verified: `bash run_tests.sh` green 4/4; 41
+  pytest tests (34 + 7).
 
 - P3.11c — size-aware frame reads landed (commit `a0a497a`): the Raspberry Pi
   Python driver's `_do_poll()` no longer drops long control frames. Before,
