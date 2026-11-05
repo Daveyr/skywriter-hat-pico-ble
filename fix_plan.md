@@ -148,6 +148,12 @@ docker run -it --rm \
    corrected to the datasheet's 0xA2 = 162 in the act), and the Arduino
    `poll()` now reads whole frames (132-byte requests) so the 120-byte
    version string arrives complete. 30 pytest tests; `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.11c commit): the Raspberry Pi Python driver now
+   sizes its I2C reads from the frame's Size field — long control frames
+   (132-byte Fw_Version_Info) are fetched in chunked continuation reads
+   instead of being truncated at the fixed 26-byte read; 4 new `_do_poll`
+   pins, 34 pytest tests; `run_tests.sh` 4/4. New open item P3.11d (the
+   polling thread stops on the first I2C error).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -226,19 +232,24 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.10 → done, moved to the Done section below.
 - [x] P3.11 → done, moved to the Done section below.
 - [x] P3.11b → done, moved to the Done section below.
-- [ ] P3.11c Control-frame reads on real hardware (discovered by P3.11b,
-      low priority): the Raspberry Pi Python driver's `_do_poll()` still
-      reads a fixed 26 bytes per poll, so on a real Raspberry Pi an
-      Fw_Version_Info frame (132 bytes at the wire) can never be fully
-      received — `_handle_firmware_info` would see only the first ~14
-      characters of the string, without its NUL terminator. Nothing breaks
-      today because the Python driver never *asks* for the version (it never
-      sends Request_Message 0x06) and System_Status (16-byte frame) fits the
-      read. If a consumer ever wants the live version through this driver,
-      extend `_do_poll` with size-aware reads (or send Request_Message 0x06
-      and size the read to the frame's Size byte). The P3.16 firmware and
-      the P4.x probes are unaffected (see the P4.1 note about the 132-byte
-      Arduino read).
+- [x] P3.11c → done, moved to the Done section below.
+
+- [ ] P3.11d The poll thread dies on the FIRST I2C error (discovered by
+      P3.11c, small): `AsyncWorker.run()` treats any `False` return from
+      `_do_poll` as "abort looping" (`if not self.todo(): stop_event.set();
+      break`), which silently ends the background polling thread after the
+      first bus error — and that is exactly what `_do_poll` returns from its
+      `except IOError` path, whose `io_error_count`-based "up to 10
+      consecutive errors" grace (and the raise past 10) can never be reached
+      because the thread is already dead after error #1. The fixture-replay
+      path is unaffected (it drives `_do_poll` directly). Fix sketch:
+      `_do_poll` should return `True` while the error counter still has
+      grace (so the loop retries the next 5 ms tick) and only the >10 raise
+      ends the thread (an unhandled exception terminates it with a visible
+      traceback in the log); decide explicitly whether a persistently dead
+      bus should also set the worker's stop event cleanly instead of dying
+      via raise. Pin with a mock-bus test that the FIRST error does not stop
+      the thread.
 
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 
@@ -315,12 +326,20 @@ item names what needs the Pico W plugged in.
 
 - [ ] P4.1 `hw/serial_probe.py` (host, needs `pyserial`): flash a test sketch
       via `pico-arduino/flash.sh`, capture the USB serial port, assert boot
-      banner, sensor frame streaming and framing. Hardware-check note from
-      P3.11b: the shared Arduino library's `poll()` now issues 132-byte I2C
+      banner, sensor frame streaming and framing. Hardware-check notes:
+      (P3.11b) the shared Arduino library's `poll()` now issues 132-byte I2C
       reads (its former 32-byte request truncated the firmware-version
       frame); the interface guide only promises that reading a whole message
       works, so confirm on hardware that sensor-frame streaming is unaffected
       when the host clocks more bytes than the current frame contains.
+      (P3.11c) the Raspberry Pi Python driver now sizes its reads from the
+      frame's Size field and fetches frames longer than the first 26-byte
+      read with chunked continuation reads (26 + 32 + 32 + 32 + 10 for the
+      132-byte Fw_Version_Info frame) while the transfer (TS) line is still
+      asserted — confirm on a real sensor that the I2C buffer really
+      continues across separate read transactions of one asserted transfer
+      (the fixture replay only proves the driver-side arithmetic), and that
+      the RPi Linux SMBus 32-byte single-call cap is respected.
 - [ ] P4.2 `hw/ble_hid_probe.py` (host, needs `bleak` + the host's Bluetooth
       radio): automate scan/GATT/pairing/services — target `AC-BLE-01`,
       `AC-BLE-02`, `AC-BLE-03`.
@@ -362,6 +381,50 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.11c — size-aware frame reads landed (commit `a0a497a`): the Raspberry Pi
+  Python driver's `_do_poll()` no longer drops long control frames. Before,
+  every poll read a fixed 26 bytes per I2C transaction, so a real
+  Fw_Version_Info report (0x83, Interface.pdf §3.5.1, 132 bytes at the wire)
+  could never arrive complete — `_handle_firmware_info` saw only the first ~22
+  payload characters of the 120-byte NUL-padded version field, with no NUL
+  terminator. Parts:
+  - `library/skywriter/__init__.py`: the poll now sizes its reads from the
+    frame's **Size field** (frame byte 0, the total message length INCLUDING
+    the 4-byte header, per Interface.pdf §3.3; §2.3 note 1 recommends exactly
+    this). The first read stays 26 bytes (the classic full-layout sensor
+    frame stays a single read; nothing changes in the 200 Hz hot path), and
+    when the Size field announces a longer message the remainder is fetched
+    with chunked continuation reads while the transfer (TS) pin is still
+    asserted — chunked at 32 bytes because the Linux SMBus helper cannot
+    request more per call (kernel `I2C_SMBUS_BLOCK_MAX`), so a complete
+    132-byte frame arrives as 26 + 32 + 32 + 32 + 10. Dispatch now happens
+    only for complete, non-corrupt frames (Size < 4 is skipped) and passes
+    the decoder exactly the Size-field byte range minus the header
+    (continuing the P3.3 off-by-four contract); bus padding or over-answering
+    beyond the Size field never reaches a decoder. New module constants
+    `SW_MAX_MESSAGE_SIZE = 255` (protocol cap, §3.2) and
+    `SW_I2C_READ_CHUNK = 32` (SMBus cap).
+  - `tests/test_do_poll.py`: 4 new pins (34 pytest tests now) — the exact
+    five-read chase sequence against a streaming fake bus (F17 arrives
+    complete, payload = the full header-stripped frame), the
+    empty-continuation case drops the partial frame without dispatching,
+    padding/mocked over-answer never spills past the Size field, and a
+    corrupt Size (< 4) dispatches nothing while the poll thread stays alive.
+  - Hardware side: whether the real sensor continues its I2C buffer across
+    the separate read transactions of one asserted transfer is the one claim
+    this fix cannot verify offline — recorded onto fix item P4.1 so the
+    outer hardware loop checks it (the Arduino driver's whole-frame single
+    read, P3.11b, is unaffected).
+  - Discovered while working here (new fix item **P3.11d**): the
+    `AsyncWorker` polling thread treats the first `False` from `_do_poll` as
+    "stop looping", so the driver's "10 consecutive I2C errors" grace counter
+    can never be reached and one transient bus error silently ends event
+    polling. Not fixed in this commit (thread-lifecycle design choice,
+    hardware-adjacent); P3.11d holds the precise analysis and fix sketch.
+  Verified: 34 pytest tests green (30 + 4); `bash run_tests.sh` green 4/4
+  (fixture corpus, library unit tests, replay suite, all three example
+  sketches compile).
 
 - P3.11b — Deviation D9 closed (commit `d1db8f3`): the two control frames
   beside Sensor_Data_Output are surfaced as canonical events on BOTH drivers,
