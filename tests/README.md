@@ -37,11 +37,11 @@ temporarily*:
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
-without the ledger being updated. The `specs/README.md` deviation rows (D3
-airwheel wrap, D4 touch early-return, D5 garbage dispatch,
-D6 firmware validity, D7 gesture attributes, D8 stale AGENTS.md gotcha, D9
-control-frame events) are therefore each guaranteed to flip its annotation to a
-hard assertion in the same change that closes it.
+without the ledger being updated. The `specs/README.md` deviation rows — D2
+(Arduino buffer overrun), D3 (airwheel wrap, Arduino side), D4 (touch
+early-return), D6 (firmware validity), D7 (gesture attributes), D8 (stale
+AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
+to flip its annotation to a hard assertion in the same change that closes it.
 
 Values: positions are raw 16-bit sensor units — the Python driver's ±4-unit
 rounding (it rounds to 4 decimals of raw/65536) is the only tolerated

@@ -67,7 +67,9 @@ _on_touch = {}
 _on_touch_repeat = {}
 _on_touch_last = {}
 _on_garbage = None
-_on_circle = {}
+# Circle handler: single callable receiving the direction as a string
+# ('clockwise' or 'counter-clockwise'), like the flick/garbage registries.
+_on_circle = None
 _is_setup = False
 
 
@@ -183,6 +185,9 @@ def _handle_sensor_data(data):
 
                 if gesture[0] == 'flick' and callable(_on_flick):
                     _on_flick(gesture[1], gesture[2])
+
+                if gesture[0] == 'circle' and callable(_on_circle):
+                    _on_circle(gesture[1])
 
                 break
 
@@ -478,6 +483,26 @@ def garbage():
     def register(handler):
         global _on_garbage
         _on_garbage = handler
+
+    return register
+
+
+def circle(*args, **kwargs):
+    '''Bind an action to the circle gestures
+
+    The handler receives the direction as a string:
+    'clockwise' or 'counter-clockwise'.
+
+    Note: the sensor only recognizes circles while its AirWheel feature is
+    disabled (a free-standing "grab and twist" recognition mode); the default
+    setup() enables AirWheel, so in that configuration no circle events arrive.
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_circle
+        _on_circle = handler
 
     return register
 

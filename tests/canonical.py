@@ -61,12 +61,18 @@ EVENT_KEYS = {
 POSITION_TOLERANCE = 4
 
 # Gesture codes (Interface.pdf §4.5 / skywriter.h constants) — Python exposes
-# flicks as (from, to) zone-name pairs, C++ as raw codes.
+# flicks as (from, to) zone-name pairs and circles as direction strings, the
+# C++ driver as raw wire codes.
 FLICK_CODES = {
     ('west', 'east'): 2,
     ('east', 'west'): 3,
     ('south', 'north'): 4,
     ('north', 'south'): 5,
+}
+
+CIRCLE_CODES = {
+    'clockwise': 6,
+    'counter-clockwise': 7,
 }
 
 # Arduino touch/tap/doubletap codes (skywriter.h SW_* constants) -> canonical
@@ -103,6 +109,11 @@ def canonicalize_python_record(record):
         return {'event': 'gesture', 'code': FLICK_CODES[pair]}
     if kind == 'garbage':
         return {'event': 'gesture', 'code': 1}
+    if kind == 'circle':
+        code = CIRCLE_CODES.get(record['direction'])
+        if code is None:
+            raise ValueError(f'unknown circle direction: {record["direction"]!r}')
+        return {'event': 'gesture', 'code': code}
     if kind in ('touch', 'tap', 'doubletap'):
         return {'event': kind, 'zone': record['zone']}
     if kind == 'airwheel':

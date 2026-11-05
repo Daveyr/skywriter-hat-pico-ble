@@ -82,6 +82,8 @@ class PythonDriverAdapter(ReplayAdapter):
         sky._on_flick = lambda src, dst: self.records.append(
             {'kind': 'flick', 'from': src, 'to': dst})
         sky._on_garbage = lambda: self.records.append({'kind': 'garbage'})
+        sky._on_circle = lambda direction: self.records.append(
+            {'kind': 'circle', 'direction': direction})
         sky._on_airwheel = lambda degrees: self.records.append(
             {'kind': 'airwheel', 'degrees': degrees})
 

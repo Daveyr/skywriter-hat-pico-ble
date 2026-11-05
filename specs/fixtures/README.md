@@ -51,6 +51,18 @@ so every field is present at its fixed offset (see `specs/README.md`):
 Header: `size`(=total bytes incl. header) `flags`(0x08, per vendor examples)
 `seq` `id`(`0x91` sensor, `0x15` status, `0x83` fw version).
 
+### Shorter frames (mask without the AirWheel field)
+
+`DataOutputConfigMask` decides which payload elements are present, in the
+fixed element order of `specs/README.md`. `F21_circle_cw` / `F22_circle_ccw`
+use mask `0x0003` (DSPStatus + GestureInfo — the AirWheel-disabled
+configuration under which the sensor recognizes circles, `hid_mapping.md` §6
+"Circle/AirWheel exclusivity"): only elements *before* AirWheelInfo are
+present, so every fixed offset up to GestureInfo is unchanged and the
+decoders' indexing stays valid. Elements that would shift when the AirWheel
+field is absent (xyzPosition and after) do not appear in these frames — no
+fixture yet exercises a mask that shifts them.
+
 ## Provenance
 
 Each fixture's `source` field in the manifest is one of:

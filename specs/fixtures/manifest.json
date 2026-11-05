@@ -10,6 +10,7 @@
     "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
     "2026-11-04 revision: the AirWheel counter wrap is a signed 8-bit difference (wraps 255->0, 32 counts per revolution) — see specs/hid_mapping.md §2. F14 was re-authored from counter 0x1E to 0xFE; its '1e' filename label is stale (filenames are stable by rule) but the data value is 0xFE.",
     "2026-11-05 revision (P3.14a settled): the first AirWheel-valid frame after driver start or after any AirWheel-invalid stretch is a silent baseline (emits nothing) — the counter is free-running, so it cannot be read against a stale reference. F20 (counter 00) was added ahead of F18 in touch_with_position_and_airwheel to keep its +90 deg expectation under the settled rule.",
+    "2026-11-05 revision (P3.5b): circle gestures (wire codes 6/7) are now dispatched by the Python driver (circle(direction) decorator; deviation D10 closed). F21/F22 give the corpus its first AirWheel-disabled mask (bit 3 off, 0x0003): only fields up to GestureInfo are present, so the fixed offsets before it stay valid.",
     "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout."
   ],
   "frames": {
@@ -112,6 +113,16 @@
       "file": "F20_airwheel_baseline00.hex",
       "source": "synthetic (Interface.pdf Table 4-10; counter value copied from F11)",
       "desc": "AirWheel counter 00, AirWheelValid set. Re-baseline frame: feeds touch_with_position_and_airwheel so F18's counter 08 reads as +8 steps instead of a first-frame contradiction (P3.14a baseline decision)."
+    },
+    "F21_circle_cw": {
+      "file": "F21_circle_cw.hex",
+      "source": "vendor pattern (Interface.pdf Table A-3 'Clockwise Circle' trace rows, repacked; see the frame-layout note in fixtures/README.md)",
+      "desc": "Circle clockwise recognized: GestureInfo word 06 20 00 00 (code 6, class bits 12-15 = 2). DataOutputConfigMask 0x0003 (DSPStatus + GestureInfo only, AirWheel field absent) — the AirWheel-disabled configuration under which the sensor recognizes circles (§6 Circle/AirWheel exclusivity). The Table A-3 trace itself shows code 0 ('Circle Gesture not recognized because AirWheel is On'); the recognized word is constructed from Table 4-10 GestureInfo bits."
+    },
+    "F22_circle_ccw": {
+      "file": "F22_circle_ccw.hex",
+      "source": "vendor pattern (Interface.pdf Table A-3 'Counter Clockwise Circle' trace rows, repacked; see the frame-layout note in fixtures/README.md)",
+      "desc": "Circle counter-clockwise recognized: GestureInfo word 07 20 00 00 (code 7, class bits 12-15 = 2). Same AirWheel-disabled mask 0x0003 as F21; recognized word constructed from Table 4-10 GestureInfo bits as above."
     }
   },
   "scenarios": [
@@ -198,6 +209,34 @@
         "hid": []
       },
       "note": "The gesture event itself is part of the decoder contract (§2); the §6 mapping table then maps garbage to nothing (which is why expect.hid is empty) [AC-MAP-05]."
+    },
+    {
+      "name": "circle_clockwise",
+      "frames": ["F21_circle_cw"],
+      "expect": {
+        "canonical": [
+          {"event": "gesture", "code": 6, "class": 2, "edge": false,
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "consumer", "action": "press", "usage": 233}
+        ]
+      },
+      "note": "Circle clockwise (code 6) → Consumer Volume Increment per §6. Dormant in the default profile: the sensor recognizes circles only with AirWheel disabled (§6 Circle/AirWheel exclusivity), which is exactly the F21 frame's mask — this scenario exercises the decoder contract; the §6 volume row arms with the mapping engine (P3.15) [AC-MAP-05]."
+    },
+    {
+      "name": "circle_counter_clockwise",
+      "frames": ["F22_circle_ccw"],
+      "expect": {
+        "canonical": [
+          {"event": "gesture", "code": 7, "class": 2, "edge": false,
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "consumer", "action": "press", "usage": 234}
+        ]
+      },
+      "note": "Circle counter-clockwise (code 7) → Consumer Volume Decrement per §6; same AirWheel-disabled exclusivity as circle_clockwise [AC-MAP-05]."
     },
     {
       "name": "touch_press_and_release",

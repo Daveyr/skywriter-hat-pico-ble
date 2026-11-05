@@ -80,6 +80,10 @@ class TestSetupHandshake(unittest.TestCase):
         def on_move(x, y, z):  # noqa: ARG001 - signature must match driver
             pass
 
+        @self.sky.circle()
+        def on_circle(direction):  # noqa: ARG001 - signature must match driver
+            pass
+
         # Decorating triggered setup() exactly once; it must not raise.
         self.assertTrue(self.sky._is_setup)
 
@@ -119,6 +123,7 @@ class TestSetupHandshake(unittest.TestCase):
         # Callbacks registered where setup() could see them.
         self.assertTrue(callable(self.sky._on_airwheel))
         self.assertTrue(callable(self.sky._on_move))
+        self.assertTrue(callable(self.sky._on_circle))
 
 
 if __name__ == '__main__':
