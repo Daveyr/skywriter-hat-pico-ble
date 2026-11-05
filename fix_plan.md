@@ -156,8 +156,7 @@ library both use). Python driver fixes go to `library/`.
 
 ### 3b — Python driver defects (`library/skywriter/__init__.py`) — one per item
 
-- [ ] P3.3 Deviation D1 — off-by-4 header regression (commit `e7e2399`):
-      slice the 4-byte header off before dispatch so payload offsets line up.
+- [x] P3.3 → done, moved to the Done section below.
 - [ ] P3.4 Deviation D3 — AirWheel wrap: signed 8-bit delta
       (`d = ((cur - last + 128) % 256) - 128` steps, degrees = `d * 11.25`)
       instead of `(cur - last)/32.0` with the `< 0.5` drop guard.
@@ -304,6 +303,25 @@ attribute table limit).
 
 ## Done
 
+- P3.3 — Deviation D1 closed (commit `c09981f`): `_do_poll()` in
+  `library/skywriter/__init__.py` now strips the 4-byte frame header (size,
+  flags, sequence, message ID) before dispatching, so
+  `_handle_sensor_data` / `_handle_status_info` / `_handle_firmware_info`
+  receive exactly the payload their field offsets assume. Before the fix
+  every decoded value was read 4 bytes into the header (positions from the
+  size/flags words, gestures from the timestamp, …) — the regression from
+  commit `e7e2399` (removal of the old `data.pop(0)` header-stripping).
+  Why the whole fixture suite had been blind to it: the replay adapters feed
+  the payload directly and never exercise `_do_poll`. Hence the new
+  `tests/test_do_poll.py`: it drives the driver's real `_do_poll()` code
+  path with recorded fixture frames (F01 sensor data, F16 status ack, F17
+  fw version) and pins the payload-dispatch contract, plus an end-to-end
+  position-decode check (F01 → x/y/z move callback values). Ledger row D1
+  removed from `specs/README.md`; stale D1 references updated in
+  `specs/fixtures/manifest.json`, `tests/README.md`,
+  `tests/adapters_python.py`, `tests/test_harness.py` and
+  `tests/test_scenarios.py`. `bash run_tests.sh` green 4/4; pytest corpus
+  now 22 tests.
 - P3.1 — fixture-replay harness skeleton landed (this commit): `tests/` is a
   pytest package picked up automatically by `run_tests.sh`'s existing
   `fixture_replay` check. Parts (see `tests/README.md` for the full map):
