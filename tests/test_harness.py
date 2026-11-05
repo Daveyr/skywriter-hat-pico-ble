@@ -41,7 +41,7 @@ def python_adapter():
 # ---------------------------------------------------------------- harness ---
 
 def test_manifest_loads_and_every_scenario_is_replayable(manifest):
-    assert manifest['schema'] == 'skywriter-fixtures/v1'
+    assert manifest['schema'] == 'skywriter-fixtures/v2'
     assert manifest['frames'] and manifest['scenarios']
 
     # Loading every referenced fixture frame must succeed and every frame's

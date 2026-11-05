@@ -86,6 +86,11 @@ docker run -it --rm \
   Update (2026-11-05, P3.1 commit): the replay tests are no longer
   "skipped, not a failure" — `tests/` exists and all 11 harness meta-tests
   pass; `bash run_tests.sh` remains green end-to-end (4/4 checks).
+  Update (2026-11-05, P3.2 commit): manifest expectations are now
+  machine-checkable (`tests/canonical.py` + `tests/hid_grammar.py`); all 18
+  pytest tests pass (11 harness meta-tests + 7 spec/assertion tests);
+  deviation tolerances in the manifest are self-arming against the
+  `specs/README.md` ledger (new row D9); `run_tests.sh` still green 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -147,12 +152,7 @@ library both use). Python driver fixes go to `library/`.
 ### 3a — Replay harness (must exist before decoder/fix items)
 
 - [x] P3.1 → done, moved to the Done section below.
-- [ ] P3.2 Structured expectation grammar: replace the manifest's prose
-      `expect` fields with a machine-checkable format (structured event list,
-      e.g. `{"event": "airwheel", "degrees": +45}`, plus per-scenario HID
-      outcome records) and migrate every scenario to it. Manifest-style prose
-      stays only as comments. This is what makes the harness from P3.1 able
-      to assert, instead of matching free-text like `move(0.0076, …)`.
+- [x] P3.2 → done, moved to the Done section below.
 
 ### 3b — Python driver defects (`library/skywriter/__init__.py`) — one per item
 
@@ -176,6 +176,18 @@ library both use). Python driver fixes go to `library/`.
       only highest-bit) touch; must process every set bit and continue
       decoding AirWheel/xyz in the same frame.
 - [ ] P3.11 Deviation D7 — same gesture-attribute fix as P3.7.
+- [ ] P3.11b Deviation D9 — surface control-frame results as canonical
+      events (discovered by P3.2): Python `_handle_status_info` /
+      `_handle_firmware_info` parse their payload and emit a record the
+      harness adapter can capture (System_Status: Set_Runtime id + error
+      code; Fw_Version: FwValid flag + NUL-stripped version string — validity
+      semantics itself is P3.6/D6), and Arduino `poll()` cases `0x15`/`0x83`
+      call new optional callbacks (`onSystemStatus`, `onFirmwareVersion`).
+      Then, in the same commit: remove the D9 row from `specs/README.md` and
+      drop the `omit_pending` annotations on the `status_ack` /
+      `fw_version_valid` scenarios in `specs/fixtures/manifest.json` — the
+      realization checks re-arm the assertions automatically (see
+      `tests/README.md`, "Canonical grammar").
 
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 
@@ -188,10 +200,34 @@ library both use). Python driver fixes go to `library/`.
       (fixtures F07, F08, F09, F10, F18).
 - [ ] P3.14 Airwheel semantics per §5: 11.25°-quantized notches, sign,
       accumulator. Target `AC-MAP-04` wrap survivor (fixtures F11–F15).
+      **P3.14a must be settled first.**
+- [ ] P3.14a Airwheel baseline decision (discovered by P3.2 — the two
+      manifest expectations imply different decoder rules): `airwheel_wrap`
+      requires the scenario's **first** airwheel frame (F14, counter 0xFE)
+      to be a *silent baseline* (otherwise a nonsense −22.5° event would
+      fire), while `touch_with_position_and_airwheel` expects F18 (counter
+      0x08, also a scenario-fresh frame) to emit **+90°** as if the initial
+      counter were 0. Decide the rule (likely: first airwheel frame in a
+      fresh decoder is a silent baseline — that is what a hand re-entering
+      the field requires — and then re-author F18's expectation, e.g. by
+      prepending an airwheel-baseline frame F20 to its scenario or revising
+      its canonical/HID record), update `specs/fixtures/manifest.json` and,
+      if the change is contract-level, `specs/hid_mapping.md` §2 first.
+      Gate: blocks P3.14.
 - [ ] P3.15 Full §6 default mapping table as the single implementation table
       ("the table IS the implementation"), incl. garbage → nothing, reserved
       doubletap east/west → nothing, and media/consumer rows. Target
       `AC-MAP-05`, `AC-MAP-06`.
+- [ ] P3.15b Fixture-corpus gap fill (discovered by P3.2): the corpus has no
+      scenario that exercises actual pointer movement (F01, then a second
+      valid *moderately different* position → a real mouse delta), nor any
+      fixture for several §6 rows: `touch(north/south)` hold auto-scroll,
+      `tap(east/west/north/south)` right-click + middle-click + Page Up /
+      Page Down rows, `doubletap(east/west)` reserved (nothing) rows, and
+      S→N/N→S volume flicks. Add frames per `specs/fixtures/README.md`
+      ("Adding fixtures") with structured expectations; needed for the
+      P3.12–P3.15 assertions and `AC-MAP-01`, `AC-MAP-02`, `AC-MAP-03`,
+      `AC-MAP-08`.
 
 ### 3e — BLE HID firmware (`pico-arduino/`) — software written here, verified
 in Phase 4 on hardware
@@ -315,6 +351,62 @@ attribute table limit).
   user-local and dies with the current container; until the image is
   rebuilt, a fresh container needs the `pip install` above before
   `run_tests.sh`.
+- P3.2 — structured expectation grammar landed (this commit).
+  `specs/fixtures/manifest.json` bumped to schema `skywriter-fixtures/v2`:
+  every scenario's `expect.canonical` is now an event list in the
+  `tests/canonical.py` grammar (the canonical sensor-event model of
+  `specs/hid_mapping.md` §2, plus the two control messages), and
+  `expect.hid` is the scenario's controller output as `tests/hid_grammar.py`
+  records (mouse move/button/wheel/click, keyboard Page Up/Down, consumer
+  media usage IDs). Prose remains only in `note`/`desc` fields — nothing in
+  the manifest is matched free-text any more. Parts:
+  - `tests/deviations.py` — parses the "Known driver deviations" table in
+    `specs/README.md` (single source of truth) so test code and fixture
+    annotations never second-guess which deviations are open, or for which
+    driver.
+  - `tests/canonical.py` — native-records → canonical-event converters for
+    both adapters, the documented value tolerances (±4 raw sensor units for
+    the Python driver's 4-decimal rounding — the only tolerated
+    representation difference in the whole suite), expectation compare with
+    `omit_pending` / `keys_pending` deviation gating, mirrored
+    *realization* checks, and cross-driver parity diffing (AC-MAP-09).
+  - `tests/hid_grammar.py` — schema for the HID outcome records per
+    `specs/hid_mapping.md` §3–§6, validated for every scenario now; the
+    replay-assertion of those records arms with the mapping-engine items
+    P3.12–P3.15 (the manifest is their machine-readable acceptance data).
+  - `tests/test_scenarios.py` — 7 new tests: manifest lint (structured
+    schema, annotation ↔ ledger consistency incl. affected-driver
+    cross-checks), per-scenario × per-driver canonical expectation compare,
+    deviation-realization checks (an annotated omission must really happen —
+    a fix that lands without removing the specs/README.md row fails with
+    exact instructions), HID-record well-formedness, and per-scenario
+    cross-driver parity with one-sided omissions attributable only to
+    exactly-that-driver annotations. With the 11 P3.1 meta-tests: 18 pytest
+    tests green; `bash run_tests.sh` passes 4/4 checks.
+  - Self-arming mechanism (the point of the whole exercise): the known-red
+    decoder defects are encoded as *tolerances tied to the ledger*, never as
+    weakened expectations — e.g. the `garbage_gesture` scenario tolerates the
+    Python driver omitting the garbage event only while D5 stands and
+    *asserts* the omission still reproduces; when P3.5 lands and the D5 row
+    is removed, the same scenario hard-asserts the event with no weakening
+    left anywhere (only the row + annotation removal, which the lint forces).
+  - Ledger addition (discovered during migration): **D9** — neither driver
+    surfaces `System_Status` (`0x15`) / `Fw_Version_Info` (`0x83`) control
+    frames as records, so the `status_ack` / `fw_version_valid` scenario
+    expectations are annotated pending D9. New fix item: P3.11b.
+  - Discovered, recorded as work items: **P3.14a** — the `airwheel_wrap`
+    (first-frame-silent baseline at F14) and `touch_with_position_and_airwheel`
+    (F18 counter 0x08 → +90° from a fresh state) expectations imply
+    contradictory airwheel baseline rules; settle before P3.14. **P3.15b** —
+    fixture-corpus gaps: no real pointer-movement scenario, no auto-scroll /
+    edge-and-keyboard-area / vertical-flick fixtures. Also: the v1 prose
+    "mouse delta" on F18 is superseded by a spec-correct structured record —
+    per `hid_mapping.md` §3 rule 4 a single first valid position only sets
+    the cursor baseline (manifest note reflects this).
+  - Environment note: this container still has the user-local `ziglang`
+    C++ toolchain from P3.1 (used by the host-decoder adapter); a fresh
+    container needs `pip install --user --break-system-packages ziglang`
+    again until the image rebuild is verified host-side.
 - Phase 0 — repository hygiene: clean tree, sandbox image + loop volumes
   ready, model subscriptions visible to the agent.
 - Phase 1 — acceptance specs written and committed (`1c0b12a`):

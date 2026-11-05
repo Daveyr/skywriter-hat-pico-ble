@@ -66,7 +66,7 @@ fixture_replay() {
   if [ -d tests ] && ls tests/test_*.py >/dev/null 2>&1; then
     python3 -m pytest -q tests/
   else
-    echo "no tests/ yet — fixture replay tests are fix_plan.md item P3.3 (skipped, not a failure)"
+    echo "no tests/ yet — fixture replay tests landed with fix_plan item P3.1 (skipped, not a failure)"
     return 0
   fi
 }

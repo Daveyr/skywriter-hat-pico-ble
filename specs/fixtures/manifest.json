@@ -1,8 +1,11 @@
 {
-  "schema": "skywriter-fixtures/v1",
+  "schema": "skywriter-fixtures/v2",
   "date": "2026-11-04",
     "notes": [
-    "Expectations follow specs/hid_mapping.md §6. Python expectations assume the decoder receives the message payload (frame[4:]) — see deviation D1 in specs/README.md.",
+    "v2 (P3.2): expectations are machine-checkable. expect.canonical holds the event list in the tests/canonical.py grammar (the vocabulary of hid_mapping.md §2); expect.hid holds the scenario's HID output as hid_grammar.py records. Prose remains only in frame desc/source and scenario note fields.",
+    "Canonical annotations on expectation entries: omit_pending {deviation, drivers} means those drivers may omit the event while that specs/README.md deviation row is open (the annotation must be dropped when the row is fixed); keys_pending {deviation, keys, drivers} means the named event keys may be absent from those drivers' records while the row is open.",
+    "Gesture class is the wire value of GestureInfo bits 12-15 (0 garbage, 1 flick, 2 circle); edge is GestureInfo bit 16. Consumer usages are decimal usage IDs: Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Inc 0x00E9=233, Volume Dec 0x00EA=234. Page Up 0x4E=78, Page Down 0x4F=79.",
+    "Python expectations assume the decoder receives the message payload (frame[4:]) — the harness feeds it that way; see deviation D1 in specs/README.md. Positions in canonical form are raw 16-bit units; the Python decoders' ±4-unit rounding tolerance is documented in tests/canonical.py.",
     "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
     "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
     "2026-11-04 revision: the AirWheel counter wrap is a signed 8-bit difference (wraps 255->0, 32 counts per revolution) — see specs/hid_mapping.md §2. F14 was re-authored from counter 0x1E to 0xFE; its '1e' filename label is stale (filenames are stable by rule) but the data value is 0xFE.",
@@ -110,152 +113,200 @@
       "name": "position_track",
       "frames": ["F01_position_only"],
       "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)"],
-        "arduino": "onXYZ(500, 1000, 200)",
-        "python": "move(0.0076, 0.0153, 0.0031)  # raw/65536 rounded to 4 dp; caveat: the legacy library emits every position, including the first — the new ports implement the §3 baseline and emit nothing here",
-        "hid": "no mouse movement: the first valid position only sets the pointer baseline (hid_mapping.md §3 rule 4); the next frame would emit a delta [AC-MAP-01]"
-      }
+        "canonical": [
+          {"event": "position", "x": 500, "y": 1000, "z": 200}
+        ],
+        "hid": []
+      },
+      "note": "Decoder level: one position event. The USB-HID side must NOT move the cursor here: per hid_mapping.md §3 rule 4 the first valid position only sets the pointer baseline; a follow-up frame would emit the delta [AC-MAP-01]."
     },
     {
       "name": "position_jump_rebaseline",
       "frames": ["F01_position_only", "F19_position_jump"],
       "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)", "position(x=32768, y=32768, z=4096)"],
-        "arduino": "onXYZ(500, 1000, 200); onXYZ(32768, 32768, 4096)",
-        "python": "move(0.0076, 0.0153, 0.0031); move(0.5, 0.5, 0.0625)",
-        "hid": "movement for F01 only; F19 delta (+32268, +31768) exceeds JUMP_THRESHOLD (8192) -> discarded and baseline reset to (32768, 32768) [AC-MAP-01]"
-      }
+        "canonical": [
+          {"event": "position", "x": 500, "y": 1000, "z": 200},
+          {"event": "position", "x": 32768, "y": 32768, "z": 4096}
+        ],
+        "hid": []
+      },
+      "note": "F19's delta (+32268, +31768 raw) exceeds JUMP_THRESHOLD (8192), so the pointer model must discard the movement and re-baseline — pointer-model assertion (fix item P3.12); decode-level both positions are ordinary events."
     },
     {
       "name": "flick_west_east",
       "frames": ["F02_flick_west_east"],
       "expect": {
-        "canonical": ["gesture(code=2, class=flick, edge=false)"],
-        "arduino": "onGesture(2)  # SW_FLICK_WEST_EAST",
-        "python": "flick('west', 'east')",
-        "hid": "consumer report: Scan Next Track (0x00B5)"
-      }
+        "canonical": [
+          {"event": "gesture", "code": 2, "class": 1, "edge": false,
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "consumer", "action": "press", "usage": 181}
+        ]
+      },
+      "note": "GestureInfo bit 17 (reserved, set in F02) must stay ignored. Inserted into the structured manifest (P3.2) from the reviewed prose expectations."
     },
     {
       "name": "flick_east_west",
       "frames": ["F03_flick_east_west"],
       "expect": {
-        "canonical": ["gesture(code=3, class=flick, edge=false)"],
-        "arduino": "onGesture(3)  # SW_FLICK_EAST_WEST",
-        "python": "flick('east', 'west')",
-        "hid": "consumer report: Scan Previous Track (0x00B6)"
+        "canonical": [
+          {"event": "gesture", "code": 3, "class": 1, "edge": false,
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "consumer", "action": "press", "usage": 182}
+        ]
       }
     },
     {
       "name": "edge_flick_east_west",
       "frames": ["F04_edge_flick_east_west"],
       "expect": {
-        "canonical": ["gesture(code=3, class=flick, edge=true)"],
-        "arduino": "onGesture(3)  # edge flag dropped today (D7)",
-        "python": "flick('east', 'west')  # edge flag dropped today (D7)",
-        "hid": "consumer report: Scan Previous Track (0x00B6)"
-      }
+        "canonical": [
+          {"event": "gesture", "code": 3, "class": 1, "edge": true,
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "consumer", "action": "press", "usage": 182}
+        ]
+      },
+      "note": "The edge-flick flag (bit 16) must survive into the canonical event (§2) even though the §6 mapping treats it like any east-west flick."
     },
     {
       "name": "gesture_in_progress",
       "frames": ["F05_gesture_in_progress"],
       "expect": {
         "canonical": [],
-        "arduino": "no callback (code 0)",
-        "python": "no callback (code 0)",
-        "hid": "nothing [AC-MAP-05]"
+        "hid": []
       }
     },
     {
       "name": "garbage_gesture",
       "frames": ["F06_garbage_gesture"],
       "expect": {
-        "canonical": ["gesture(code=1, class=garbage, edge=false)"],
-        "arduino": "onGesture(1)  # SW_GESTURE_GARBAGE",
-        "python": "_on_garbage NOT called today (D5); spec: garbage() handler fires",
-        "hid": "nothing [AC-MAP-05]"
-      }
+        "canonical": [
+          {"event": "gesture", "code": 1, "class": 0, "edge": false,
+           "omit_pending": {"deviation": "D5", "drivers": ["python"]},
+           "keys_pending": {"deviation": "D7", "keys": ["class", "edge"], "drivers": ["python", "cpp"]}}
+        ],
+        "hid": []
+      },
+      "note": "The gesture event itself is part of the decoder contract (§2); the §6 mapping table then maps garbage to nothing (which is why expect.hid is empty) [AC-MAP-05]."
     },
     {
       "name": "touch_press_and_release",
       "frames": ["F07_touch_center", "F08_touch_center_hold"],
       "time_gap_ms": 250,
       "expect": {
-        "canonical": ["touch(zone=center)", "touch(zone=center)"],
-        "arduino": "onTouch(10)  # SW_TOUCH_CENTER, once per frame (today also early-returns, D4)",
-        "python": "('touch','center') handler, subject to repeat_rate limiter (default 4/s)",
-        "hid": "left button down at F07; F08 is a repeat and must NOT re-trigger; left button release 250 ms after last touch frame (TOUCH_RELEASE_MS=200) [AC-MAP-02]"
-      }
+        "canonical": [
+          {"event": "touch", "zone": "center"},
+          {"event": "touch", "zone": "center"}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "button", "button": "left", "state": "down"},
+          {"channel": "mouse", "action": "button", "button": "left", "state": "up"}
+        ]
+      },
+      "note": "Left button presses at F07 only; the F08 repeat must NOT re-press. Release is inferred after TOUCH_RELEASE_MS (200 ms) without touch frames — checked in the post-scenario simulated gap; the timed assertion arms with the clock-aware mapping adapter (P3.13). [AC-MAP-02]"
     },
     {
       "name": "tap_center",
       "frames": ["F09_tap_center"],
       "expect": {
-        "canonical": ["tap(zone=center)"],
-        "arduino": "onTouch(5)  # SW_TAP_CENTER",
-        "python": "('tap','center')",
-        "hid": "left click: button down for TAP_CLICK_MS (50 ms) then up [AC-MAP-03]"
-      }
+        "canonical": [
+          {"event": "tap", "zone": "center"}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "click", "button": "left", "count": 1, "click_ms": 50}
+        ]
+      },
+      "note": "Tap-to-click: press + release of TAP_CLICK_MS (50 ms); never leaves a button held [AC-MAP-03]."
     },
     {
       "name": "doubletap_center",
       "frames": ["F10_doubletap_center"],
       "expect": {
-        "canonical": ["doubletap(zone=center)"],
-        "arduino": "onTouch(0)  # SW_DOUBLETAP_CENTER",
-        "python": "('doubletap','center')",
-        "hid": "double left click: two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]"
-      }
+        "canonical": [
+          {"event": "doubletap", "zone": "center"}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "click", "button": "left", "count": 2, "click_ms": 50}
+        ]
+      },
+      "note": "Two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]."
     },
     {
       "name": "airwheel_quarter_turn_cw",
       "frames": ["F11_airwheel_step00", "F12_airwheel_step08", "F13_airwheel_step10"],
       "expect": {
-        "canonical": ["airwheel(+90 deg)", "airwheel(+90 deg)"],
-        "arduino": "onAirwheel(90); onAirwheel(90)",
-        "python": "airwheel(90.0); airwheel(90.0)",
-        "hid": "wheel up 8 notches, then 8 notches (11.25 deg per step) [AC-MAP-04]"
-      }
+        "canonical": [
+          {"event": "airwheel", "degrees": 90},
+          {"event": "airwheel", "degrees": 90}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "wheel", "notches": 8},
+          {"channel": "mouse", "action": "wheel", "notches": 8}
+        ]
+      },
+      "note": "F11 (counter 00) is the baseline frame and emits nothing; one sensor step = 11.25 deg = one wheel notch, so +8 steps = +90 deg = 8 notches up per event [AC-MAP-04]."
     },
     {
       "name": "airwheel_wrap",
       "frames": ["F14_airwheel_step1e", "F15_airwheel_step02"],
       "expect": {
-        "canonical": ["airwheel(+45 deg)"],
-        "arduino": "onAirwheel(45)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
-        "python": "airwheel(45.0)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
-        "hid": "wheel up 4 notches (4 steps x 11.25 deg). The 255->0 wrap must count as +4 steps, not -252 [AC-MAP-04]"
-      }
+        "canonical": [
+          {"event": "airwheel", "degrees": 45,
+           "omit_pending": {"deviation": "D3", "drivers": ["python", "cpp"]}}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "wheel", "notches": 4}
+        ]
+      },
+      "note": "F14 (0xFE) is the first airwheel frame of the scenario and acts as the silent baseline; F15's 0x02 vs 0xFE signed-8-bit difference is +4 steps = +45 deg — the 255->0 wrap counts forward, not -252 steps [AC-MAP-04]. See fix_plan airwheel-baseline item for the related F18 question."
     },
     {
       "name": "touch_with_position_and_airwheel",
       "frames": ["F18_touch_center_with_position"],
       "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)", "touch(zone=center)", "airwheel(+90 deg)"],
-        "arduino": "onXYZ(500, 1000, 200); onTouch(10); airwheel SKIPPED today by early return (D4)",
-        "python": "move(0.0076, 0.0153, 0.0031); ('touch','center'); airwheel(90.0)",
-        "hid": "mouse delta + left button down + wheel up 8 notches, all from one frame [AC-MAP-06]"
-      }
+        "canonical": [
+          {"event": "position", "x": 500, "y": 1000, "z": 200},
+          {"event": "touch", "zone": "center"},
+          {"event": "airwheel", "degrees": 90,
+           "omit_pending": {"deviation": "D4", "drivers": ["cpp"]},
+           "note": "carries the legacy initial-counter=0 reading from the v1 manifest (+8 steps); the baseline rule agreed for F14 (first airwheel frame silent) would instead make this event never fire — decision lands with fix_plan's airwheel-baseline item at P3.14"}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "button", "button": "left", "state": "down"},
+          {"channel": "mouse", "action": "wheel", "notches": 8}
+        ]
+      },
+      "note": "All fields of one frame processed: button down + wheel up + decoded position [AC-MAP-06]. On the HID side F18 alone sets the pointer baseline (§3 rule 4: no previous valid position) — no mouse movement is correct; the original prose 'mouse delta' is superseded by this structured record."
     },
     {
       "name": "status_ack",
       "frames": ["F16_status_ack_a2"],
       "expect": {
-        "canonical": ["system_status(msg_id=0xA2, error=0x0000)"],
-        "arduino": "setRuntimeParam() returns true",
-        "python": "get_status(0xA2) returns True",
-        "hid": "n/a (control message)"
-      }
+        "canonical": [
+          {"event": "system_status", "msg_id": 170, "error": 0,
+           "omit_pending": {"deviation": "D9", "drivers": ["python", "cpp"]}}
+        ],
+        "hid": []
+      },
+      "note": "System_Status (0x15) reply: Set_Runtime_Parameter id 0xA2 acknowledged with error 0x0000. Control frames produce no HID output; neither driver currently surfaces them as records (D9, fix item P3.11b)."
     },
     {
       "name": "fw_version_valid",
       "frames": ["F17_fw_version_valid"],
       "expect": {
-        "canonical": ["firmware_info(fw_valid=0xAA, version='1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00')"],
-        "arduino": "unimplemented (case 0x83 no-op today)",
-        "python": "no exception; version string printed (spec: FwValid must equal 0xAA to be valid, see D6)",
-        "hid": "n/a (control message)"
-      }
+        "canonical": [
+          {"event": "firmware_info", "fw_valid": 170,
+           "version": "1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00",
+           "omit_pending": {"deviation": "D9", "drivers": ["python", "cpp"]}}
+        ],
+        "hid": []
+      },
+      "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf §4.3 — D6 tracks the Python driver's acceptance values), version string NUL-terminated. Control frames produce no HID output."
     }
   ]
 }
