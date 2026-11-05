@@ -134,7 +134,7 @@ docker run -it --rm \
    `touch_with_position_and_airwheel` scenario hard-asserts its +90°
    airwheel event on both drivers, new fixture F23 (`touch_two_zones`
    scenario) covers a two-touch frame. The D4 row is gone from
-   `specs/README.md`. 30 pytest tests; `run_tests.sh` green 4/4.
+   `specs/README.md`. 29 pytest tests; `run_tests.sh` green 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -343,6 +343,53 @@ attribute table limit).
 
 ## Done
 
+- P3.10 — Deviation D4 closed (commit `fc0853e`): **every set touch bit in a
+  frame now produces its event on both drivers**, and the frame's remaining
+  fields are still decoded in the same pass. Per `hid_mapping.md` §2 ("all
+  set touch bits in a frame produce their events; a frame may carry touch +
+  position + airwheel simultaneously and all must be processed"):
+  - `arduino/Skywriter/skywriter.cpp` touch branch: the early `return` after
+    the first (highest-bit) match is gone — the existing highest-bit-first
+    scan (`comp = 1 << 14`, code order per skywriter.h `SW_*`) now dispatches
+    `handle_touch` for every set bit and falls through to the AirWheel
+    decode below, so the touch frames no longer eat their own airwheel
+    events (the `touch_with_position_and_airwheel` scenario was pinning
+    exactly that lost +90° event as `omit_pending D4/cpp`).
+  - `library/skywriter/__init__.py` touch loop: the `break` after the first
+    matching action is gone — all set bits dispatch. Why the Python side is
+    in this fix although the D4 row said "Arduino": the spec sentence is
+    driver-agnostic and AC-MAP-09 parity needs both (see the F23 fixture
+    below); the Python variant of the defect only dropped the extra touch
+    bits (the rest of the frame was already processed), which is why it
+    never got its own row.
+  - Python repeat-limiter repair the above forced: the "last fired"
+    timestamp of an `'all'`-position subscription is now kept **per zone**
+    (`_on_touch_last[kind][zone]`), mirroring how the exact-zone branch keys
+    it. It was a single `_on_touch_last[kind]['all']` slot — harmless while
+    the loop dispatched at most one touch per frame (one shared slot = one
+    update per frame), but with every-set-bit dispatch two exact-simultaneous
+    zones suppressed each other inside the same frame (second zone hit the
+    shared 250 ms window). Rate-limit behaviour for a single held finger is
+    unchanged (the `touch_press_and_release` F07/F08 250 ms gap replay
+    asserts that).
+  - Fixture corpus: new frame `F23_touch_two_zones.hex` (mask 0x001F,
+    TouchInfo word `12 00 00 00` = Center bit 4 + West bit 1 — synthetic,
+    Interface.pdf Table 4-10 layout) with scenario `touch_two_zones`;
+    canonical expectations hard-assert `touch:center` then `touch:west` on
+    BOTH drivers (scan order = highest bit first; parity compare is
+    order-insensitive anyway), `expect.hid` pins
+    left-button-down for the center hold (touch(west) hold has no §6 row —
+    only tap(west) maps to middle click); the button record arms with the
+    mapping engine (P3.13).
+  - Self-arming flip: D4 row removed from `specs/README.md`; the
+    `omit_pending {D4, cpp}` annotation dropped from the
+    `touch_with_position_and_airwheel` airwheel event — it is now a hard
+    assertion on both drivers; the open-deviation enumerations updated in
+    `specs/hid_mapping.md` §2, `tests/README.md`, `tests/test_scenarios.py`
+    and `tests/test_harness.py` (now "D7–D9").
+  `bash run_tests.sh` green 4/4; 29 pytest tests (the suite counts
+  per-driver test functions, so the added scenario pins assertions without
+  changing the count).
 - P3.9 — Deviation D3 closed: the **Arduino** driver now wraps the AirWheel
   (rotation) counter the same way the Python driver has since P3.4 (commit
   `885475f`), so both drivers emit identical events across the 255→0
