@@ -254,17 +254,19 @@ def test_link_state_is_reported_to_the_serial_console():
 # (specs/ble_hid.md §5, §6, §8 — AC-BLE-03 / AC-BLE-07 software side; the
 # RF truth of these rules is the Phase-4 hardware probes P4.2/P4.3.)
 
-def test_pairing_needs_no_sketch_code_and_bond_limit_is_documented():
+def test_pairing_needs_no_sketch_code_and_bond_store_truth_is_documented():
     """§5: pairing (Just Works + numeric comparison) and bonding live in
     the core's Security Manager; the sketch documents that — including the
-    RAM-only bond store of this core version, the known AC-BLE-06 gate."""
+    FLASH-BACKED bond store of this core version (P3.17b resolved the old
+    RAM-only assumption; see the note above) and the AC-BLE-06 hardware
+    gate."""
     src = sketch_source()
     assert "Just Works" in src
     assert "numeric comparison" in src
     assert "bonding" in src
-    assert "AC-BLE-06" in src and "RAM only" in src, (
-        "the sketch must document the core's RAM-only bond store (the "
-        "AC-BLE-06 hardware gate)")
+    assert "AC-BLE-06" in src and "FLASH-BACKED" in src, (
+        "the sketch must document the core's flash-backed bond store "
+        "(the AC-BLE-06 hardware gate)")
 
 
 def test_battery_reported_100_at_connect_via_direct_api():

@@ -45,12 +45,15 @@
 
   Pairing and bonding (specs/ble_hid.md §5): pairing is entirely inside the
   Bluetooth stack (Just Works auto-confirmed, numeric comparison
-  auto-confirmed, bonding requested at startHID). KNOWN LIMITATION, gated by
-  AC-BLE-06: this core's Security Manager keeps bond data in RAM only (its
-  device-database backend is the RAM store; the flash-backed store is not
-  wired up in the arduino port), so after a Pico W power cycle hosts must
-  re-pair on this core version — verify on hardware (P4.3) before treating
-  as a spec deviation.
+  auto-confirmed, bonding requested at startHID). Bond persistence
+  (AC-BLE-06): the Security Manager stores paired bonds in the
+  core's FLASH-BACKED device database (`le_device_db_tlv.c`, 16 entries),
+  wired up at boot by the core's own Bluetooth initialisation into a
+  dedicated 8 KiB flash section (`__bluetooth_tlv`) appended after this
+  firmware image — no sketch code touches it. Verified at the code level
+  (P3.17b, against core 6.3.1); AC-BLE-06 remains the hardware gate
+  (P4.3) that must prove a paired host reconnects without re-pairing
+  across a real power cycle.
 
   Battery (specs/ble_hid.md §8): the Pico W is USB-powered, so the battery
   service starts at 100 % (startHID's default battery=100) and is refreshed

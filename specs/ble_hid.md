@@ -92,12 +92,25 @@ Device identity:
   notifications; the device must not attempt to send Input Reports before the
   host enables them (respect `HIDS_SUBEVENT_INPUT_REPORT_ENABLE`).
 - **Bonding:** a bonded host must reconnect without re-pairing after a
-  power cycle of the Pico W (`AC-BLE-06`). The spike could not confirm where
-  BTstack persists bond data on this core (flash vs RAM) — implementation must
-  verify bond persistence and, if the core stores bonds in RAM only, persist
-  them to flash (LittleFS is available in-core) or document the re-pair
-  limitation as a spec deviation. Treat `AC-BLE-06` as the gate that proves
-  this either way.
+  power cycle of the Pico W (`AC-BLE-06`). Code-level truth (resolved by
+  P3.17b against core 6.3.1, supersedes the spike's open question): the
+  core's Security Manager bond store is the **flash-backed**
+  `le_device_db_tlv.c` — the core's shipped build config
+  (`include/btstack_config.h`) defines `NVM_NUM_DEVICE_DB_ENTRIES 16`
+  (16 persistent bond entries, verified by the linked object's compiled
+  `entry_map` symbol size of 16 bytes), the boot-time variant
+  initialisation chain wires it up before any sketch code runs
+  (`initVariant()` → `init_cyw43_wifi()` → `cyw43_arch_init_with_country()`
+  → `cyw43_arch_init()` → `btstack_cyw43_init()` → `setup_tlv()` →
+  `le_device_db_tlv_configure()`, all under the
+  `ipbtstack=ipv4btcble` build menu), and the paired Long-Term Key is
+  persisted on pairing completion (`le_device_db_encryption_set` →
+  `le_device_db_tlv_store`) into a dedicated 8 KiB flash section
+  (`__bluetooth_tlv`, two 4 KiB banks) appended after the firmware image.
+  Flash persistence is asserted only at the code level here;
+  `AC-BLE-06` remains the hardware gate that proves it on real radios
+  (P4.3). If hardware contradicts the expectation, record a spec
+  deviation row in `specs/README.md`.
 
 ## 6. Connection lifecycle
 
@@ -140,7 +153,12 @@ Each criterion is verified by the outer hardware loop unless marked manual.
 
 ## 10. Open questions (resolve during implementation)
 
-1. Bond storage persistence on this core (§5) — gated by `AC-BLE-06`.
+1. ~~Bond storage persistence on this core (§5)~~ — **resolved by P3.17b**
+   (2026-11-05, code level): the Security Manager uses the **flash-backed**
+   `le_device_db_tlv.c` store with 16 entries, wired at boot into the
+   core's own 8 KiB flash section, so no on-flash store needs wiring and no
+   re-pair deviation is expected. `AC-BLE-06` still verifies it on real
+   hardware (P4.3).
 2. Exact `__BLEGetAppearance()` value for the mouse+keyboard composite — read
    at runtime and record in `HW_REPORT.md`.
 3. Whether `setCanSendNowCB` is needed to pace reports on slow connection

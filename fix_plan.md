@@ -216,6 +216,16 @@ docker run -it --rm \
    deadlocks); life-cycle work runs in loop(). Code-level bond-store
    truth for AC-BLE-06 established against core 6.3.1 — RAM-only (see the
    new item P3.17b). 95 pytest tests (82 + 13); `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.17b commit): the P3.17 RAM-only bond-store
+   conclusion was WRONG — verified against the prebuilt core libraries
+   and the shipped build config that the Bluetooth Security Manager uses
+   the FLASH-BACKED device database (`le_device_db_tlv.c`, 16 persistent
+   bond entries, wired at boot into a dedicated 8 KiB flash section
+   appended after the firmware image), so no re-pair limitation needs
+   documenting and no flash store needs wiring; the sketch comment,
+   `specs/ble_hid.md` §5/§10 and the source-level pin were corrected, and
+   P4.3's AC-BLE-06 check now verifies the expectation "reconnect WITHOUT
+   re-pairing" on hardware.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -310,26 +320,10 @@ in Phase 4 on hardware
 
 - [x] P3.16 → done, moved to the Done section below.
 - [x] P3.17 → done, moved to the Done section below.
-- [ ] P3.17b Resolve the pairing-bond persistence question before the
-      hardware loop inherits a stale assumption (AC-BLE-06 gate, §5 open
-      question 1). Code-level truth established by P3.17 against core
-      6.3.1: `PicoBluetoothBLEHID.startHID` requests Secure-Connections
-      bonding (`SM_AUTHREQ_SECURE_CONNECTION | SM_AUTHREQ_BONDING`) but the
-      Security Manager's bond database is the **RAM store**
-      (`le_device_db_memory.c` — the flash-backed
-      `le_device_db_tlv.c` is compiled from CMake yet `#error`s unless
-      `NVM_NUM_DEVICE_DB_ENTRIES` is defined in `btstack_config.h`, which
-      the arduino port never defines; `MAX_NR_LE_DEVICE_DB_ENTRIES = 1`).
-      So a bonded host re-pairs after every Pico W power cycle on this
-      core version. P4.3 must verify this on hardware; if confirmed,
-      either (a) wire the flash store — needs core-level build
-      configuration the arduino-pico port does not set (define
-      `NVM_NUM_DEVICE_DB_ENTRIES` + init `btstack_tlv_flash_bank`), or
-      (b) write the re-pair limitation up as a spec deviation row in
-      `specs/README.md` (§5 explicitly permits this) and update
-      `specs/ble_hid.md` §5/§10 (the sketch already documents the
-      limitation in its pairing comment). The sketch comment must be kept
-      in step with whichever outcome lands.
+- [x] P3.17b → done, moved to the Done section below (resolved: no wiring
+      needed and no deviation exists — the core's bond store IS
+      flash-backed; the P3.17 RAM-only assumption came from the wrong
+      config file).
 - [ ] P3.18 Firmware sketch: performance provisions per `specs/ble_hid.md`
       §7 — report pacing to the connection interval with delta accumulation,
       button/press transitions never coalesced away. Target `AC-BLE-04`
@@ -377,6 +371,11 @@ item names what needs the Pico W plugged in.
 - [ ] P4.3 `hw/ble_hid_probe.py` lifecycle part: latency/report-rate/
       reconnect/bond — `AC-BLE-04`, `AC-BLE-05`, `AC-BLE-06`, `AC-BLE-07`.
       Bond persistence (`AC-BLE-06`) answers `ble_hid.md` §5 open question 1.
+      2026-11-05 P3.17b expectation note: the Core's bond store is verified
+      FLASH-BACKED at the code level (see the P3.17b Done entry), so the
+      probe should EXPECT "bonded host reconnects after a Pico W power
+      cycle WITHOUT re-pairing" to PASS; record a spec-deviation row only
+      if the radio behaves otherwise.
 - [ ] P4.4 Outer loop driver `ralph_hw.sh` + `HW_REPORT.md` protocol: run the
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
@@ -412,6 +411,71 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.17b — the pairing-bond persistence question is resolved (commit
+  `<HASH>`), and the resolution **refutes** P3.17's RAM-only assumption — a
+  genuinely wrong belief in the ledger that the hardware loop was about to
+  inherit. In plain language: when a phone or computer "pairs" (establishes
+  a trusted wireless relationship) with the controller and later pairs
+  again or reconnects, the controller must remember its side of the
+  relationship. If it forgets at every power cycle, the host has to go
+  through pairing again each time. P3.17 believed this core forgets
+  (RAM-only memory); P3.17b verified it does NOT — pairings are saved into
+  the Pico W's non-volatile flash memory, so a paired host reconnects
+  without re-pairing after a power cycle. No code change was needed: the
+  belief itself was the defect, so the fix is documentation and test pins
+  in step with the verified truth, all recorded below.
+  - How the wrong belief arose: P3.17 read the Security Manager's device
+    db facts from `pico-sdk/lib/btstack/port/arduino/btstack_config.h`
+    (the config of BTstack's legacy port for Arduino boards with an
+    EXTERNAL Bluetooth module — `MAX_NR_LE_DEVICE_DB_ENTRIES = 1`, no
+    `NVM_NUM_DEVICE_DB_ENTRIES`, i.e. RAM-only with a single entry). That
+    file is not on the Pico W build's include path at all (`platform_inc.
+    txt` uses `-iwithprefixbefore/include`), which resolves the
+    `$CORE/include/btstack_config.h` shipped specifically for the Pico W
+    builds — exactly the file the argument needed but never opened.
+  - The verified facts, level by level (all checked against the shipped
+    prebuilt core libraries with `arm-none-eabi-nm/ar` and the core's
+    source files): (a) the shipped Pico W config defines BOTH
+    `NVM_NUM_DEVICE_DB_ENTRIES 16` and `MAX_NR_LE_DEVICE_DB_ENTRIES 16`;
+    (b) with `NVM_NUM_DEVICE_DB_ENTRIES` defined, `le_device_db_memory.c`
+    (the RAM store) compiles to NOTHING (`#ifndef`-gated body) and
+    `le_device_db_tlv.c` (the flash-backed store) is the only linked
+    implementation — no `#error` is ever hit; (c) the linked object's
+    compiled state is `entry_map` 16 bytes → all 16 bond slots live;
+    (d) the arduino build menu the sketch uses (`ipbtstack=ipv4btcble` —
+    the "IPv4 + Bluetooth" option) defines `CYW43_ENABLE_BLUETOOTH=1`, so
+    the boot-time variant initialisation chain `initVariant()` →
+    `init_cyw43_wifi()` → `cyw43_arch_init_with_country()` →
+    `cyw43_arch_init()` → `btstack_cyw43_init()` → `setup_tlv()` →
+    `le_device_db_tlv_configure()` wires the flash store into the
+    Security Manager BEFORE the sketch's `startHID` ever runs; (e) the
+    flash store lands in the arduino core's own 8 KiB flash section
+    `__bluetooth_tlv` (two 4 KiB erase banks, kept out of the firmware
+    image by the ordinary flash layout — `#if 0` static asserts in the
+    core's `sdkoverride/btstack_flash_bank.cpp`); (f) on pairing
+    completion `le_device_db_encryption_set` calls
+    `le_device_db_tlv_store`, so the Long-Term Key (the shared secret a
+    bond is made of) is written to flash at pair time.
+  - Things updated in this act (no behaviour change): the sketch's
+    "KNOWN LIMITATION" pairing comment → the flash-backed truth with the
+    AC-BLE-06 hardware gate kept; `specs/ble_hid.md` §5 bonding bullet →
+    the code-level truth with citations, and §10 open question 1 →
+    resolved (2026-11-05); the source-level pin
+    `test_pairing_needs_no_sketch_code_and_bond_store_truth_is_documented`
+    (renamed from `..._bond_limit_is_documented`) now asserts
+    "FLASH-BACKED" instead of "RAM only"; the P3.17 Done entry got a
+    correction pointer; P4.3 got the expectation note (the probe should
+    expect no-re-pair PASS; record a deviation row only if the radio
+    contradicts it).
+  - Honest scope note: everything above is verified at the CODE level —
+    the radio-level proof (pair on a real host, power-cycle the Pico W,
+    reconnect without re-pairing) stays with AC-BLE-06 / P4.3 exactly as
+    the spec's verification column assigns it. `ble_hid.md` §5 wording
+    says so explicitly.
+  Verified: `bash run_tests.sh` green 4/4 (see fix_plan snapshot); 95
+  pytest tests (same count — one pin's asserted text changed, no test
+  added); `pico-arduino/SkywriterController` compiles for the Pico W.
 
 - P3.17 — the BLE (Bluetooth Low Energy) connection life cycle is wired
   into the firmware sketch (commit `445d843`): `specs/ble_hid.md` §5, §6, §8
@@ -479,7 +543,13 @@ attribute table limit).
     `#error`s without a `btstack_config.h` define the arduino port never
     sets) — so hosts re-pair after a Pico W power cycle on this core
     version. AC-BLE-06 verifies on hardware; the decision persists-vs-
-    deviates is new fix item **P3.17b**.
+    deviates is new fix item **P3.17b**. **CORRECTED by P3.17b
+    (2026-11-05): the RAM-only conclusion was built on the wrong config
+    file — the Pico W build config (`include/btstack_config.h`) DOES
+    define `NVM_NUM_DEVICE_DB_ENTRIES 16`, the flash-backed store IS the
+    linked implementation and IS wired at boot; see the P3.17b Done
+    entry. The sketch comment and the source-level pin were updated to
+    the flash-backed truth in that act.**
   - Honest scope note: `ble_link_open()` reads the stack's connection
     flag from the Arduino loop context without a lock — a 16-bit flag
     read torn between contexts is not a realistic hazard on this core,
