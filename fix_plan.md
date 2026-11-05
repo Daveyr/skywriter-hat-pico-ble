@@ -112,6 +112,13 @@ docker run -it --rm \
   carry the class and edge-flick attributes (in-progress frames still emit
   nothing); the keys_pending annotations narrowed to `cpp`, the ledger row
   to Arduino only. 29 pytest tests; `run_tests.sh` 4/4.
+  Update (2026-11-05, P3.8 commit): deviation D2 turned out to be already
+  resolved — commit `c6aecc7` (the pre-loop revert of `arduino/Skywriter/` to
+  the pristine upstream originals) removed the `setRuntimeParam` code the row
+  described, so the row is gone from the ledger without a code change; the
+  P3.16 firmware item now carries the 15-byte sensor-configuration caution so
+  the off-by-one cannot be reintroduced, and the P3.19 item records the
+  post-revert D8 context (AGENTS.md's gotchas are currently accurate).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -185,8 +192,7 @@ library both use). Python driver fixes go to `library/`.
 
 ### 3c — Arduino driver defects (`arduino/Skywriter/skywriter.cpp`) — one per item
 
-- [ ] P3.8 Deviation D2 — `setRuntimeParam` writes one byte past the 15-byte
-      command arrays (loop bound 16 vs. array length 15).
+- [x] P3.8 → done, moved to the Done section below.
 - [ ] P3.9 Deviation D3 — same signed 8-bit AirWheel wrap + silent
       first-frame-baseline fix as P3.4 (the Python reference implementation
       is in `library/skywriter/__init__.py`, commit `885475f`; the parity
@@ -247,6 +253,14 @@ in Phase 4 on hardware
       and call exactly **one** `begin()`, device name `Skywriter HID`,
       HID-class appearance. Target `AC-BLE-01`, `AC-BLE-02` (composite
       Report Map). Compiles in-container; RF behaviour verified in Phase 4.
+      (Sensor bring-up note from P3.8: the firmware's sensor stack must send
+      the four Set_Runtime_Parameter (`0xA2`) configuration commands itself —
+      the pristine stock `arduino/Skywriter` library does not configure the
+      sensor. Each command is the `0x10` control-setup byte on the I2C
+      (Inter-Integrated Circuit) write followed by **exactly 15 payload
+      bytes** (the same payload the Python `setup()` writes), never a
+      16-step copy loop over a 15-element array — that off-by-one was the
+      removed deviation D2.)
 - [ ] P3.17 Firmware sketch: pairing, battery, and lifecycle wiring per
       `specs/ble_hid.md` §5, §6, §8 — battery reported 100 % at connect,
       drop reports while unconnected, neutral resync report on (re)connect,
@@ -259,7 +273,15 @@ in Phase 4 on hardware
 - [ ] P3.19 Truth-check the AGENTS.md gotchas (deviation D8): verify the
       "`begin()` does not send `SW_SET_RUNTIME`" claim against current code
       and fix the doc if stale; re-check `poll()` `INPUT` vs
-      `INPUT_PULLUP`.
+      `INPUT_PULLUP`. (Context discovered by P3.8: commit `c6aecc7` — the
+      pre-loop revert of `arduino/Skywriter/` to the pristine upstream
+      library — removed the four runtime-parameter commands from `begin()`,
+      so both AGENTS.md gotcha claims are currently *accurate* (`begin()`
+      sends no `SW_SET_RUNTIME`, `poll()` still resets the pin mode to
+      `INPUT`); the stale side is the D8 ledger row itself, which claims the
+      gotcha is outdated. P3.19 should resolve D8 on the
+      specs/README.md/doc side, not by re-adding configuration code — sensor
+      bring-up belongs to the P3.16 firmware.)
 - [ ] P3.20 Gate: when 3a–3e are done and everything left needs the Pico W on
       a desk, write `READY_FOR_HW` listing exactly the Phase 4 tests and
       their pass/fail criteria.
@@ -314,6 +336,35 @@ attribute table limit).
 
 ## Done
 
+- P3.8 — Deviation D2 closed as *already resolved* (commit `4eea275`): the
+  out-of-bounds `setRuntimeParam` write described by the row does not exist in
+  the current tree, so there was nothing in the code to change. How the
+  discrepancy arose: the offending code (the four `Set_Runtime_Parameter`
+  (`0xA2`) configuration commands with 15-element arrays copied into a
+  16-step transmission loop over the I2C (Inter-Integrated Circuit) bus) was
+  introduced in commit `e781528` (pre-loop host adaptation of the shared
+  Arduino library) and removed again by commit `c6aecc7` ("restore master
+  branch examples. keep examples as clean originals" — the pre–Phase 2 revert
+  of `arduino/Skywriter/` to the pristine upstream library); the acceptance
+  specs were committed at `1c0b12a` while the adapted library was still in the
+  tree, which is where the D2 evidence ("15 initializers vs loop bound 16",
+  verified verbatim at `e781528`) came from. Verification against the current
+  tree: no `setRuntimeParam`/`cmdAirWheel` anywhere in `arduino/`,
+  `pico-arduino/`, `library/`, `tests/`; the C++ driver's only per-index
+  write loops are safely bounded (touch bit scan over a 16-bit word; `poll()`
+  payload read capped by the 32-byte I2C request into `command_buffer[32]`,
+  terminator at index ≤ 28). The row was removed from `specs/README.md`
+  (the harness's `tests/deviations.py` treats every remaining row as live and
+  open, so a void row would poison the single source of truth);
+  `tests/README.md`'s enumeration gained the closure note; the open-deviation
+  docstring lists in `test_harness.py` / `test_scenarios.py` became
+  "D3, D4, D7–D9". No fixture annotation referenced D2, so nothing needed
+  re-arming. The functional residue was re-homed, not lost: sensor
+  configuration now belongs to the P3.16 firmware's sensor stack (exact
+  15-byte payload caution added there, guarding the old 16-vs-15 bound), and
+  P3.19 records the same history (post-revert, the AGENTS.md "begin() does
+  not send SW_SET_RUNTIME" gotcha is accurate again; the stale side is the D8
+  ledger row). `bash run_tests.sh` green 4/4; 29 pytest tests.
 - P3.7 — Deviation D7 closed for the **Python** driver (commit `deb1c0b`):
   gesture attributes now travel with every gesture event, and the ledger row
   narrows to the Arduino driver alone (fix item P3.11 closes it there).
