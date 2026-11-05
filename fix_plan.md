@@ -320,3 +320,11 @@ attribute table limit).
     loop continues; (d) a stale `DONE` at start exits immediately without
     running the agent; (e) a failing `git push` is tolerated with a clear
     message. No friction found; no script changes needed.
+- W7b (host note, non-blocking): the loop is currently running on local
+  branch `ralph-dry-run` (checked out from `pico-ble` by the host just
+  before the dry-run iterations), so the end-of-run `git push` fails with
+  "no upstream branch" and commits stay only on the bind mount. Nothing to
+  fix in `ralph.sh` (`git push` failure is already tolerated); the host
+  should either merge `ralph-dry-run` into `pico-ble` when the dry-run
+  phase is complete, or run
+  `git push --set-upstream origin ralph-dry-run` once.
