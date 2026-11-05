@@ -66,6 +66,8 @@ class PythonDriverAdapter(ReplayAdapter):
         sky.rotation = 0.0
         sky._lastrotation = None
         sky.gesture = 0
+        sky.gesture_class = 0
+        sky.gesture_edge = False
         sky.io_error_count = 0
         sky._on_touch_last = {}
 
@@ -76,13 +78,16 @@ class PythonDriverAdapter(ReplayAdapter):
         # rate-limits repeat touch callbacks; give it the virtual clock.
         sky.millis = lambda: int(round(clock.now_ms))
 
-        # Capture handlers in the driver's own callback vocabulary.
+        # Capture handlers in the driver's own callback vocabulary. Gesture
+        # handlers snapshot the driver's attribute globals (gesture class
+        # and edge-flick flag, decoded from the GestureInfo word right
+        # before dispatch — deviation D7's Python half, fix item P3.7).
         sky._on_move = lambda x, y, z: self.records.append(
             {'kind': 'move', 'x': x, 'y': y, 'z': z})
-        sky._on_flick = lambda src, dst: self.records.append(
+        sky._on_flick = lambda src, dst: self._gesture_record(
             {'kind': 'flick', 'from': src, 'to': dst})
-        sky._on_garbage = lambda: self.records.append({'kind': 'garbage'})
-        sky._on_circle = lambda direction: self.records.append(
+        sky._on_garbage = lambda: self._gesture_record({'kind': 'garbage'})
+        sky._on_circle = lambda direction: self._gesture_record(
             {'kind': 'circle', 'direction': direction})
         sky._on_airwheel = lambda degrees: self.records.append(
             {'kind': 'airwheel', 'degrees': degrees})
@@ -96,6 +101,20 @@ class PythonDriverAdapter(ReplayAdapter):
         def handler(zone):
             self.records.append({'kind': kind, 'zone': zone})
         return handler
+
+    def _gesture_record(self, base):
+        '''Record one gesture event with its GestureInfo attributes.
+
+        The driver decodes the full GestureInfo word and exposes code
+        (bits 0-7), class (bits 12-15) and edge-flick flag (bit 16) as
+        module globals immediately before dispatching the flick /
+        garbage / circle callback, so snapshotting them here carries the
+        attributes into the canonical event's ``class``/``edge`` keys.
+        '''
+        base['code'] = self.sky.gesture
+        base['class'] = self.sky.gesture_class
+        base['edge'] = self.sky.gesture_edge
+        self.records.append(base)
 
     def feed(self, frame, clock):
         before = len(self.records)

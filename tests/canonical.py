@@ -29,11 +29,13 @@ keys (never asserted as values):
         ledger (fix closed), the annotation must be dropped from the manifest
         (the test_scenarios lint forces this) and the event becomes required.
     "keys_pending":  {"deviation": "D7", "keys": ["class", "edge"],
-                      "drivers": ["python", "cpp"]}
-        While open, the listed drivers may leave those keys out of their
-        event record (attributes the decoders discard today). Whatever the
-        decoder *does* provide must already match; the annotation must be
-        dropped when the ledger row goes.
+                      "drivers": ["cpp"]}
+         While open, the listed drivers may leave those keys out of their
+         event record (attributes that driver still discards — e.g. the
+         Arduino driver's gesture class/edge; the Python driver carries
+         them since P3.7). Whatever the decoder *does* provide must
+         already match; the annotation must be dropped when the ledger row
+         goes.
     "note":          short human context (not asserted, not checked)
 '''
 
@@ -60,20 +62,12 @@ EVENT_KEYS = {
 # asserts and Python-vs-C++ parity (AC-MAP-09); nothing coarser is tolerated.
 POSITION_TOLERANCE = 4
 
-# Gesture codes (Interface.pdf §4.5 / skywriter.h constants) — Python exposes
-# flicks as (from, to) zone-name pairs and circles as direction strings, the
-# C++ driver as raw wire codes.
-FLICK_CODES = {
-    ('west', 'east'): 2,
-    ('east', 'west'): 3,
-    ('south', 'north'): 4,
-    ('north', 'south'): 5,
-}
-
-CIRCLE_CODES = {
-    'clockwise': 6,
-    'counter-clockwise': 7,
-}
+# Gesture codes (Interface.pdf §4.5 / skywriter.h constants): 1 garbage,
+# 2-5 flicks (west→east, east→west, south→north, north→south), 6/7 circles
+# (clockwise, counter-clockwise). The Python driver exposes flicks as
+# (from, to) zone-name pairs and circles as direction strings; the wire
+# code, class (GestureInfo bits 12-15) and edge-flick flag (bit 16) travel
+# with every gesture record since the driver decodes the full word (P3.7).
 
 # Arduino touch/tap/doubletap codes (skywriter.h SW_* constants) -> canonical
 # (event, zone). Lowest code = highest TouchInfo bit.
@@ -104,16 +98,12 @@ def canonicalize_python_record(record):
                 'x': int(round(record['x'] * 65536)),
                 'y': int(round(record['y'] * 65536)),
                 'z': int(round(record['z'] * 65536))}
-    if kind == 'flick':
-        pair = (record['from'], record['to'])
-        return {'event': 'gesture', 'code': FLICK_CODES[pair]}
-    if kind == 'garbage':
-        return {'event': 'gesture', 'code': 1}
-    if kind == 'circle':
-        code = CIRCLE_CODES.get(record['direction'])
-        if code is None:
-            raise ValueError(f'unknown circle direction: {record["direction"]!r}')
-        return {'event': 'gesture', 'code': code}
+    if kind in ('flick', 'garbage', 'circle'):
+        # The GestureInfo attributes are carried on the record by the
+        # adapter (driver globals snapshot, P3.7): code = wire bits 0-7,
+        # class = wire bits 12-15, edge = wire bit 16.
+        return {'event': 'gesture', 'code': record['code'],
+                'class': record['class'], 'edge': record['edge']}
     if kind in ('touch', 'tap', 'doubletap'):
         return {'event': kind, 'zone': record['zone']}
     if kind == 'airwheel':

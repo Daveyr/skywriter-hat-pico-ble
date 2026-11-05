@@ -123,7 +123,12 @@ def test_python_adapter_position_values(python_adapter):
 def test_python_adapter_flick_dispatch(python_adapter):
     scenario = fixtures.scenario(fixtures.load_manifest(), 'flick_west_east')
     result = runner.replay(scenario, python_adapter)
-    assert result.records == [{'kind': 'flick', 'from': 'west', 'to': 'east'}]
+    # F02's gesture word 02 10 02 00: code 2, class 1 (flick), edge flag
+    # clear — bit 17 is reserved and must stay ignored.
+    assert result.records == [{
+        'kind': 'flick', 'from': 'west', 'to': 'east',
+        'code': 2, 'class': 1, 'edge': False,
+    }]
 
 
 def test_python_adapter_tap_dispatch(python_adapter):

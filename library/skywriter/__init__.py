@@ -56,6 +56,14 @@ _enable_auto_calibration = False
 _enable_events = True
 _debug = False
 gesture = 0
+# Attributes of the most recently recognized gesture, decoded from the
+# 32-bit GestureInfo word (Interface.pdf §4.5, Table 4-10). Handlers read
+# these alongside their own arguments, like x/y/z:
+#   gesture_class — gesture kind, GestureInfo bits 12–15
+#                   (0 none/garbage, 1 flick, 2 circle)
+#   gesture_edge  — edge-flick flag, GestureInfo bit 16
+gesture_class = 0
+gesture_edge = False
 
 io_error_count = 0
 
@@ -143,6 +151,7 @@ class AsyncWorker(StoppableThread):
 
 def _handle_sensor_data(data):
     global _lastrotation, rotation
+    global gesture, gesture_class, gesture_edge
 
     d_configmask = data[0] | data[1] << 8
     # d_timestamp = data[2] (200hz, 8-bit counter, max ~1.25sec)
@@ -167,7 +176,26 @@ def _handle_sensor_data(data):
 
     if d_configmask & SW_DATA_GESTURE and not d_gesture[0] == 0:
         # We have a gesture!
-        # is_edge = (d_gesture[3] & 0b00000001) > 0
+        #
+        # GestureInfo is a 32-bit little-endian word (Interface.pdf §4.5,
+        # Table 4-10): bits 0-7 = gesture code (0 none, 1 garbage, 2-5
+        # flicks, 6/7 circles), bits 12-15 = gesture class (1 flick,
+        # 2 circle), bit 16 = edge-flick flag, bit 31 = recognition in
+        # progress. A code of 0 -- which includes the sensor's
+        # "recognition in progress" frames (word 00 00 00 80 in the vendor
+        # trace) -- emits no event, exactly as hid_mapping.md §2 requires.
+        gesture_word = (d_gesture[0]
+                        | d_gesture[1] << 8
+                        | d_gesture[2] << 16
+                        | d_gesture[3] << 24)
+
+        # Carry the decoded attributes into the events: they become module
+        # state (like x/y/z) for the dispatched handler to read, and the
+        # replay harness snapshots them onto every gesture record.
+        gesture = gesture_word & 0xFF                 # bits 0-7: code
+        gesture_class = (gesture_word >> 12) & 0xF    # bits 12-15
+        gesture_edge = bool(gesture_word & 0x10000)   # bit 16
+
         gestures = [
             ('garbage', '', ''),
             ('flick', 'west', 'east'),
@@ -177,17 +205,17 @@ def _handle_sensor_data(data):
             ('circle', 'clockwise', ''),
             ('circle', 'counter-clockwise', '')
         ]
-        for i, gesture in enumerate(gestures):
+        for i, g in enumerate(gestures):
             if d_gesture[0] == i + 1:
 
-                if gesture[0] == 'garbage' and callable(_on_garbage):
+                if g[0] == 'garbage' and callable(_on_garbage):
                     _on_garbage()
 
-                if gesture[0] == 'flick' and callable(_on_flick):
-                    _on_flick(gesture[1], gesture[2])
+                if g[0] == 'flick' and callable(_on_flick):
+                    _on_flick(g[1], g[2])
 
-                if gesture[0] == 'circle' and callable(_on_circle):
-                    _on_circle(gesture[1])
+                if g[0] == 'circle' and callable(_on_circle):
+                    _on_circle(g[1])
 
                 break
 

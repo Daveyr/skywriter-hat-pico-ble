@@ -31,20 +31,23 @@ temporarily*:
 - `omit_pending: {deviation, drivers}` — the listed drivers may omit the event
   while that `specs/README.md` deviation row is open;
 - `keys_pending: {deviation, keys, drivers}` — the listed drivers may leave
-  those keys out (attributes the decoders discard today, e.g. D7's gesture
-  class/edge).
+  those keys out (attributes a driver still discards; e.g. D7's gesture
+  class/edge on the Arduino driver — the Python side supplies them since
+  P3.7).
 
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
 without the ledger being updated. The `specs/README.md` deviation rows — D2
 (Arduino buffer overrun), D3 (airwheel wrap, Arduino side), D4 (touch
-early-return), D7 (gesture attributes), D8 (stale
+early-return), D7 (gesture attributes, Arduino side), D8 (stale
 AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
 to flip its annotation to a hard assertion in the same change that closes it.
 (D6, firmware validity, was closed 2026-11-05 without needing a fixture
 annotation: `_handle_firmware_info`'s now-spec-correct FwValid handling is
-pinned directly in `tests/test_firmware_info.py`.)
+pinned directly in `tests/test_firmware_info.py`. D7's Python half was closed
+2026-11-05 the same way — the Python gesture events now carry class/edge and
+the `keys_pending` annotations cover only `cpp`.)
 
 Values: positions are raw 16-bit sensor units — the Python driver's ±4-unit
 rounding (it rounds to 4 decimals of raw/65536) is the only tolerated
