@@ -53,8 +53,10 @@ word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
   driver start or after any stretch of AirWheel-invalid frames is a silent
   baseline**: the counter is free-running, so it cannot be read against a
   stale reference — that frame only records the reference and emits nothing.
-  (Python side fixed 2026-11-05; the Arduino side is still open — deviation
-  D3 in `specs/README.md`.)
+  (Fixed in both drivers 2026-11-05: the Python driver
+  `library/skywriter/__init__.py` and the Arduino driver
+  `arduino/Skywriter/skywriter.cpp` both implement the signed 8-bit
+  difference and the silent first-frame baseline.)
 - **Gesture in-progress frames** (`GestureInfo` bit 31 set, code 0) produce no
   event. Code 1 (garbage) produces a `gesture(1, …)` event which the mapping
   table maps to *nothing*.

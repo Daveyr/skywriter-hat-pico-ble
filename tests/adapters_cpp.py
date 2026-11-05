@@ -13,7 +13,9 @@ parsed into native records:
 - ``{"kind": "move", "x"|..|...: int}``      raw 16-bit position values
 - ``{"kind": "touch_code", "code": int}``   Arduino touch code (see skywriter.h)
 - ``{"kind": "gesture", "code": int}``      gesture code (1 garbage, 2-5 flicks, 6-7 circles)
-- ``{"kind": "airwheel", "degrees": int}``  rotation delta in degrees
+- ``{"kind": "airwheel", "degrees": float}`` rotation delta in degrees
+                                             (quantized to 11.25-degree
+                                             sensor steps)
 
 The host has no system C++ compiler in this container (Alpine, no sudo), so
 the compiler is resolved as: ``g++``/``c++`` on PATH → ``zig c++`` on PATH →
@@ -152,7 +154,10 @@ class CppDecoderAdapter(ReplayAdapter):
         if kind == 'gesture':
             return {'kind': 'gesture', 'code': int(parts[2])}
         if kind == 'airwheel':
-            return {'kind': 'airwheel', 'degrees': int(parts[2])}
+            # %.2f printed degrees: exact for the 11.25-degree quantization
+            # of the AirWheel decoder (and for the Python parity compare,
+            # which tolerates 1e-6 float noise only).
+            return {'kind': 'airwheel', 'degrees': float(parts[2])}
         raise ValueError(f'unrecognised EV line: {line!r}')
 
     def finish(self, clock):

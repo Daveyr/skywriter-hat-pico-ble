@@ -66,18 +66,25 @@ class _SkyWriter
     void begin(unsigned char pin_xfer, unsigned char pin_reset);
     void poll();
     void onTouch( void (*)(unsigned char) );
-    void onAirwheel( void (*)(int) );
+    void onAirwheel( void (*)(float) );
     void onGesture( void (*)(unsigned char) );
     void onXYZ( void (*)(unsigned int, unsigned int, unsigned int) );
     unsigned char last_gesture, last_touch;
     unsigned int  x, y, z;
-    int rotation;
+    // Accumulated AirWheel rotation in degrees (clamped 0..1000, mirroring
+    // the Python driver's `rotation` global — the P3.4 reference).
+    float rotation = 0.0f;
   private:
     void (*handle_touch)(unsigned char)   = NULL;
-    void (*handle_airwheel)(int)    = NULL;
+    void (*handle_airwheel)(float)    = NULL;
     void (*handle_gesture)(unsigned char) = NULL;
     void (*handle_xyz)(unsigned int, unsigned int, unsigned int);
-    int lastrotation;
+    // AirWheel counter reference: `airwheel_counter_valid` stands in for the
+    // Python driver's `_lastrotation = None` sentinel — false until a frame
+    // with valid AirWheel data establishes the baseline, and cleared again by
+    // any frame without valid AirWheel data (see handles_sensor_data).
+    unsigned char lastrotation = 0;
+    bool airwheel_counter_valid = false;
     unsigned char xfer, rst, addr;
     unsigned char command_buffer[32];
     void handle_sensor_data(unsigned char* data);

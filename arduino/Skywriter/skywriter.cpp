@@ -63,7 +63,7 @@ void _SkyWriter::poll(){
 }
 
 void _SkyWriter::onTouch(    void (*function)(unsigned char) ){this->handle_touch    = function;}
-void _SkyWriter::onAirwheel( void (*function)(int)           ){this->handle_airwheel = function;}
+void _SkyWriter::onAirwheel( void (*function)(float)          ){this->handle_airwheel = function;}
 void _SkyWriter::onGesture(  void (*function)(unsigned char) ){this->handle_gesture  = function;}
 void _SkyWriter::onXYZ(      void (*function)(unsigned int,unsigned int,unsigned int) ){this->handle_xyz  = function;}
 
@@ -135,16 +135,49 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
       }
       
       if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_AIRWHEEL && data[SW_PAYLOAD_HDR_SYSINFO] & SW_SYS_AIRWHEEL ){
-        
-        double delta = (data[SW_PAYLOAD_AIRWHEEL] - lastrotation) / 32.0;
-        
-        if( delta != 0 && delta > -0.5 and delta < 0.5 ){
-          if( this->handle_airwheel != NULL ) this->handle_airwheel(delta * 360.0);  
+        // AirWheel rotation, mirroring the Python driver's reference
+        // implementation (library/skywriter/__init__.py, fix items P3.4 /
+        // P3.9, deviation D3):
+        //  * AirWheelInfo byte 0 is a free-running 8-bit rotation counter
+        //    (0-255, wraps 255->0 clockwise, 32 counts = 1 revolution, so
+        //    1 count = 11.25 degrees — Interface.pdf Table 4-10);
+        //  * the counter is free-running, so the FIRST valid frame after
+        //    driver start or after any stretch of AirWheel-invalid frames
+        //    is a SILENT baseline: a hand re-entering the field must not be
+        //    read against a stale counter (hid_mapping.md §2 baseline rule);
+        //  * consecutive frames compare with the SIGNED 8-bit difference
+        //    d = ((cur - last + 128) % 256) - 128, so a 255->0 wrap counts
+        //    as +1 step, not -254.
+
+        if( !this->airwheel_counter_valid ){
+          // Silent baseline: record the reference only, emit nothing.
+          this->airwheel_counter_valid = true;
+          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
         }
-        
-        this->rotation += delta * 360.0;
-        this->rotation %= 360;
-        
-        this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+        else{
+          int delta = (( data[SW_PAYLOAD_AIRWHEEL] - this->lastrotation + 128) % 256 + 256) % 256 - 128;
+          
+          // Delta is in degrees, quantized to 11.25 degrees per sensor step
+          // (32 counts = full 360 degree rotation)
+          // Positive numbers equal clockwise delta, negative are counter-clockwise
+          float degrees = (float)delta * 11.25f;
+          
+          if( degrees != 0.0f ){
+            if( this->handle_airwheel != NULL ) this->handle_airwheel(degrees);
+            
+            this->rotation += degrees;
+            
+            if( this->rotation < 0.0f ) this->rotation = 0.0f;
+            if( this->rotation > 1000.0f ) this->rotation = 1000.0f;
+          }
+          
+          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+        }
+      }
+      else{
+        // This frame carries no valid AirWheel data: the counter may have
+        // free-run meanwhile, so re-baseline on the next valid frame
+        // (same rule as the Python driver's `_lastrotation = None`).
+        this->airwheel_counter_valid = false;
       }
 }

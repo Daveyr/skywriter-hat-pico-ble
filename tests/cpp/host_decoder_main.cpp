@@ -10,7 +10,8 @@
 //   EV MOVE <x> <y> <z>       onXYZ, raw 16-bit position values
 //   EV GESTURE <code>         onGesture, code per skywriter.h (1 garbage, 2-5 flicks, 6-7 circles)
 //   EV TOUCH <code>           onTouch, code per skywriter.h (see below)
-//   EV AIRWHEEL <degrees>     onAirwheel, rotation delta in degrees (int)
+//   EV AIRWHEEL <degrees>     onAirwheel, rotation delta in degrees
+//                             (float — one sensor step = 11.25 degrees)
 //
 // Touch codes (skywriter.h constants, lowest code = highest bit scanned):
 //   0 doubletap center · 1 doubletap east · 2 doubletap north
@@ -19,7 +20,11 @@
 //   11 touch east · 12 touch north · 13 touch west · 14 touch south
 //
 // One process per replayed scenario, so decoder state (last gesture, wheel
-// counter, …) is naturally fresh each run.
+// counter, …) is naturally fresh each run — in particular the AirWheel
+// baseline (`airwheel_counter_valid` = the C++ counterpart of the Python
+// driver's `_lastrotation = None` sentinel) and the accumulated
+// `rotation` degrees start at their pristine defaults, the same fresh state
+// the Python adapter resets explicitly in its `begin()`.
 
 #include <cstdio>
 #include <cstring>
@@ -39,8 +44,11 @@ static void on_gesture(unsigned char code) {
   printf("EV GESTURE %u\n", static_cast<unsigned>(code));
 }
 
-static void on_airwheel(int degrees) {
-  printf("EV AIRWHEEL %d\n", degrees);
+static void on_airwheel(float degrees) {
+  // Two decimals: degrees come quantized to 11.25-degree sensor steps, so
+  // quarters are the finest value the driver can emit (%.2f is exact for
+  // them).
+  printf("EV AIRWHEEL %.2f\n", degrees);
 }
 
 static int hexval(char c) {

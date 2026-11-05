@@ -38,12 +38,15 @@ temporarily*:
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
-without the ledger being updated. The `specs/README.md` deviation rows — D3
-(airwheel wrap, Arduino side), D4 (touch early-return), D7 (gesture
+without the ledger being updated. The `specs/README.md` deviation rows —
+D4 (touch early-return), D7 (gesture
 attributes, Arduino side), D8 (stale
 AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
 to flip its annotation to a hard assertion in the same change that closes it.
-(D6, firmware validity, was closed 2026-11-05 without needing a fixture
+(D3, the Arduino AirWheel wrap, was closed 2026-11-05 the same way: commit
+P3.9 brought `skywriter.cpp` the Python driver's signed 8-bit counter
+difference and silent first-frame baseline, so the `airwheel_wrap` scenario
+now hard-asserts its +45° event on both drivers. D6, firmware validity, was closed 2026-11-05 without needing a fixture
 annotation: `_handle_firmware_info`'s now-spec-correct FwValid handling is
 pinned directly in `tests/test_firmware_info.py`. D7's Python half was closed
 2026-11-05 the same way — the Python gesture events now carry class/edge and

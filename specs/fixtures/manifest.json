@@ -301,14 +301,13 @@
       "frames": ["F14_airwheel_step1e", "F15_airwheel_step02"],
       "expect": {
         "canonical": [
-          {"event": "airwheel", "degrees": 45,
-           "omit_pending": {"deviation": "D3", "drivers": ["cpp"]}}
+          {"event": "airwheel", "degrees": 45}
         ],
         "hid": [
           {"channel": "mouse", "action": "wheel", "notches": 4}
         ]
       },
-      "note": "F14 (0xFE) is the first airwheel frame of the scenario and acts as the silent baseline (settled airwheel-baseline rule: the first AirWheel-valid frame after a gap silently re-baselines); F15's 0x02 vs 0xFE signed-8-bit difference is +4 steps = +45 deg — the 255->0 wrap counts forward, not -252 steps [AC-MAP-04]. The Python driver implements this (D3 fixed for Python, 2026-11-05); the 'cpp' tolerance stands until the same fix lands in the Arduino driver (P3.9) and the D3 row leaves the ledger."
+      "note": "F14 (0xFE) is the first airwheel frame of the scenario and acts as the silent baseline (settled airwheel-baseline rule: the first AirWheel-valid frame after a gap silently re-baselines); F15's 0x02 vs 0xFE signed-8-bit difference is +4 steps = +45 deg — the 255->0 wrap counts forward, not -252 steps [AC-MAP-04]. Fixed in both drivers 2026-11-05 (D3 closed: Python P3.4, Arduino P3.9); asserted on Python and C++ with no tolerance left."
     },
     {
       "name": "touch_with_position_and_airwheel",

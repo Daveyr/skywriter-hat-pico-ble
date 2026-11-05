@@ -119,6 +119,13 @@ docker run -it --rm \
   P3.16 firmware item now carries the 15-byte sensor-configuration caution so
   the off-by-one cannot be reintroduced, and the P3.19 item records the
   post-revert D8 context (AGENTS.md's gotchas are currently accurate).
+  Update (2026-11-05, P3.9 commit): deviation D3 is closed — the Arduino
+  driver now has the same signed 8-bit AirWheel counter difference and
+  silent first-frame baseline as the Python driver (P3.4), so the
+  `airwheel_wrap` scenario hard-asserts its +45° event on **both** drivers
+  with no tolerance left (the `omit_pending` D3 annotation is gone from
+  `specs/fixtures/manifest.json` and the D3 row is gone from
+  `specs/README.md`). 29 pytest tests; `run_tests.sh` green 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -193,14 +200,7 @@ library both use). Python driver fixes go to `library/`.
 ### 3c — Arduino driver defects (`arduino/Skywriter/skywriter.cpp`) — one per item
 
 - [x] P3.8 → done, moved to the Done section below.
-- [ ] P3.9 Deviation D3 — same signed 8-bit AirWheel wrap + silent
-      first-frame-baseline fix as P3.4 (the Python reference implementation
-      is in `library/skywriter/__init__.py`, commit `885475f`; the parity
-      test AC-MAP-09 requires the C++ decoder to emit the identical events —
-      when it lands: drop the `omit_pending` annotation on `airwheel_wrap`
-      in `specs/fixtures/manifest.json`, remove the D3 row from
-      `specs/README.md`, and reset `sky._lastrotation`/`rotation` state the
-      same way in `tests/adapters_cpp.py`'s C++ fresh-state shim).
+- [x] P3.9 → done, moved to the Done section below.
 - [ ] P3.10 Deviation D4 — touch decode early-`return`s after the first (and
       only highest-bit) touch; must process every set bit and continue
       decoding AirWheel/xyz in the same frame.
@@ -336,6 +336,53 @@ attribute table limit).
 
 ## Done
 
+- P3.9 — Deviation D3 closed: the **Arduino** driver now wraps the AirWheel
+  (rotation) counter the same way the Python driver has since P3.4 (commit
+  `885475f`), so both drivers emit identical events across the 255→0
+  counter wrap AC-MAP-09 requires. Parts:
+  - `arduino/Skywriter/skywriter.cpp` airwheel branch rewritten as the
+    Python reference: the counter is a free-running 8-bit byte, so the first
+    AirWheel-valid frame after driver start or after any stretch of
+    AirWheel-invalid frames is a **silent baseline** (`airwheel_counter_valid`
+    flag — the C++ stand-in for the Python `_lastrotation = None` sentinel;
+    cleared again by every frame without valid AirWheel data), and
+    consecutive frames compare with the **signed 8-bit difference**
+    `d = ((cur - last + 128) % 256) - 128` steps × 11.25° (the old
+    unsigned `(cur - last) / 32.0` arithmetic read a 255→0 wrap as a full
+    -252-step reversal that the `|delta| < 0.5` guard then silently dropped).
+    Degree accumulation (`rotation`) mirrors the Python driver exactly:
+    float degrees, emitted only when non-zero, accumulated and clamped to
+    0…1000.
+  - `skywriter.h`: `onAirwheel` callback signature `void (*)(int)` →
+    `void (*)(float)` and `int rotation` → `float rotation = 0.0f`. Why the
+    public-signature change is part of the parity fix: one sensor step is
+    exactly 11.25°, so whole-integer degrees cannot represent a 1-step delta
+    (the Python driver's float degrees are the canonical form in
+    hid_mapping.md §2; an int-carrying callback would truncate 11.25° → 11°
+    and break AC-MAP-09 the moment any fixture carries an odd step count).
+    No shipped example passes a real handler (NeoPaint's is commented out)
+    and all three example sketches still compile.
+  - Replay harness: `tests/cpp/host_decoder_main.cpp` prints the float
+    degrees (`EV AIRWHEEL %%.2f` — exact for 11.25°-quantized values) and
+    `tests/adapters_cpp.py` parses them as floats, so the C++ canonical
+    `airwheel` records now match the Python driver's float degrees within
+    the suite's 1e-6 tolerance. Fresh state: one fresh process per scenario
+    already gives fresh decoder state, and the shim's docstring now notes
+    explicitly that the new baseline flag + `rotation` start pristine — the
+    C++ counterpart of the Python adapter's explicit
+    `sky.rotation = 0.0; sky._lastrotation = None` reset.
+  - Spec/manifest/ledger closure (self-arming flip): the `omit_pending` D3
+    annotation dropped from the `airwheel_wrap` scenario in
+    `specs/fixtures/manifest.json` — its +45° expectation is now a hard
+    assertion on **both** drivers; D3 row removed from
+    `specs/README.md`; hid_mapping.md §2 parenthetical now records the fix
+    in both drivers; the open-deviation enumerations updated in
+    `tests/README.md` and the docstrings of `tests/test_harness.py` /
+    `tests/test_scenarios.py` (now "D4, D7–D9").
+  - Verified against the compiled host decoder: F14 (counter 0xFE) is a
+    silent baseline, F15 (0x02) yields `EV AIRWHEEL 45.00` exactly once.
+  `bash run_tests.sh` green 4/4; 29 pytest tests (same count — the
+  `airwheel_wrap` tolerance hardened into an assertion, no test added).
 - P3.8 — Deviation D2 closed as *already resolved* (commit `4eea275`): the
   out-of-bounds `setRuntimeParam` write described by the row does not exist in
   the current tree, so there was nothing in the code to change. How the
