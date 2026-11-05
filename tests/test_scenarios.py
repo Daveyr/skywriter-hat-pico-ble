@@ -19,7 +19,7 @@ adapter) and checked against its machine-checkable expectations:
   streams must agree (AC-MAP-09), except for event omissions attributable to
   a deviation annotated for exactly one driver (e.g. D4's airwheel drop).
 
-Known-red decoder defects (D2–D9, specs/README.md) are annotated in the
+Known-red decoder defects (D3, D4, D7–D9, specs/README.md) are annotated in the
 manifest, never swallowed silently by these tests.
 '''
 
