@@ -31,6 +31,8 @@ canonical events (this is the vocabulary used in `fixtures/manifest.json`):
 | `tap(zone)` | `TouchInfo` bits 5–9 | same zones |
 | `doubletap(zone)` | `TouchInfo` bits 10–14 | same zones |
 | `airwheel(degrees)` | `AirWheelInfo`, when `SystemInfo` AirWheelValid | signed rotation delta; +360 = one clockwise revolution |
+| `system_status(msg_id, error)` | `System_Status` (0x15) control frame | msg_id = the acknowledged control command (e.g. 0xA2 = 170); error = 16-bit little-endian error code, 0 = applied (Interface.pdf §3.6 Table 3-8). No HID output. |
+| `firmware_info(fw_valid, version)` | `Fw_Version_Info` (0x83) control frame | fw_valid = FwValid byte (only 0xAA = valid, §4.3 Table 4-6); version = NUL-stripped version string, only carried for a valid report (nothing is emitted for invalid). No HID output. |
 
 Payload offsets for the pinned mask `0x001F`: gesture word at payload 6, touch
 word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).

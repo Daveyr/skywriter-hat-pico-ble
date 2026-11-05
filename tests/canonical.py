@@ -84,6 +84,22 @@ TOUCH_CODES = {
 }
 
 
+def canonicalize_control_record(record):
+    '''Control-frame records (P3.11b) — identical shape on both adapters:
+    ``{'kind': 'system_status', ...}`` and ``{'kind': 'firmware_info', ...}``
+    carry the parsed values, so the canonical event is a plain rename.'''
+    kind = record['kind']
+    if kind == 'system_status':
+        return {'event': 'system_status',
+                'msg_id': int(record['msg_id']),
+                'error': int(record['error'])}
+    if kind == 'firmware_info':
+        return {'event': 'firmware_info',
+                'fw_valid': int(record['fw_valid']),
+                'version': record['version']}
+    raise ValueError(f'unknown control record kind: {kind!r}')
+
+
 def canonicalize(adapter_name, records):
     '''Translate one adapter's native records into canonical-event dicts.'''
     if adapter_name == 'python':
@@ -100,6 +116,8 @@ def canonicalize_python_record(record):
                 'x': int(round(record['x'] * 65536)),
                 'y': int(round(record['y'] * 65536)),
                 'z': int(round(record['z'] * 65536))}
+    if kind in ('system_status', 'firmware_info'):
+        return canonicalize_control_record(record)
     if kind in ('flick', 'garbage', 'circle'):
         # The GestureInfo attributes are carried on the record by the
         # adapter (driver globals snapshot, P3.7): code = wire bits 0-7,
@@ -118,6 +136,8 @@ def canonicalize_cpp_record(record):
     if kind == 'move':
         return {'event': 'position', 'x': int(record['x']),
                 'y': int(record['y']), 'z': int(record['z'])}
+    if kind in ('system_status', 'firmware_info'):
+        return canonicalize_control_record(record)
     if kind == 'touch_code':
         event, zone = TOUCH_CODES[record['code']]
         return {'event': event, 'zone': zone}

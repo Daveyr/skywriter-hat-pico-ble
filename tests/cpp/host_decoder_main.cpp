@@ -22,6 +22,20 @@
 //   EV TOUCH <code>           onTouch, code per skywriter.h (see below)
 //   EV AIRWHEEL <degrees>     onAirwheel, rotation delta in degrees
 //                             (float — one sensor step = 11.25 degrees)
+//   EV SYSTEMSTATUS <msg_id> <error>
+//                             onSystemStatus, the System_Status (0x15)
+//                             acknowledge: the control command being
+//                             acknowledged (e.g. 170 = Set_Runtime_Parameter
+//                             0xA2) and its 16-bit error code (0 = applied)
+//                             — Interface.pdf §3.6 Table 3-8 (P3.11b)
+//   EV FWVERSION <fw_valid> <version>
+//                             onFirmwareVersion, the Fw_Version_Info (0x83)
+//                             report's FwValid byte and NUL-stripped version
+//                             string; only valid (0xAA) reports are emitted.
+//                             The version string is ';'-separated ASCII but
+//                             CONTAINS a space (ISO build timestamp), so the
+//                             adapter must parse it as the remainder of the
+//                             line. (Interface.pdf §4.3, P3.11b)
 //
 // Touch codes (skywriter.h constants, lowest code = highest bit scanned):
 //   0 doubletap center · 1 doubletap east · 2 doubletap north
@@ -69,6 +83,18 @@ static void on_airwheel(float degrees) {
   printf("EV AIRWHEEL %.2f\n", degrees);
 }
 
+static void on_system_status(unsigned char msg_id, unsigned int error) {
+  printf("EV SYSTEMSTATUS %u %u\n", static_cast<unsigned>(msg_id),
+         static_cast<unsigned>(error));
+}
+
+static void on_firmware_version(unsigned char fw_valid, const char* version) {
+  // %s prints the version string verbatim: it is ';'-separated ASCII but
+  // contains a space (the ISO build timestamp), so the adapter must treat
+  // everything after "EV FWVERSION <fw_valid> " as the string.
+  printf("EV FWVERSION %u %s\n", static_cast<unsigned>(fw_valid), version);
+}
+
 static int hexval(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -81,6 +107,8 @@ int main() {
   Skywriter.onTouch(on_touch);
   Skywriter.onGesture(on_gesture);
   Skywriter.onAirwheel(on_airwheel);
+  Skywriter.onSystemStatus(on_system_status);
+  Skywriter.onFirmwareVersion(on_firmware_version);
   // Reset pin 17, transfer pin 27 — the same constants the Raspberry Pi
   // Python driver uses (skywriter.py SW_RESET_PIN / SW_XFER_PIN).
   Skywriter.begin(27, 17);

@@ -68,6 +68,10 @@ class PythonDriverAdapter(ReplayAdapter):
         sky.gesture = 0
         sky.gesture_class = 0
         sky.gesture_edge = False
+        sky.system_status = 0
+        sky.system_status_error = 0
+        sky.fw_valid = 0
+        sky.fw_version = ''
         sky.io_error_count = 0
         sky._on_touch_last = {}
 
@@ -92,6 +96,18 @@ class PythonDriverAdapter(ReplayAdapter):
             {'kind': 'circle', 'direction': direction})
         sky._on_airwheel = lambda degrees: self.records.append(
             {'kind': 'airwheel', 'degrees': degrees})
+
+        # Control frames (P3.11b): the System_Status handler gets the parsed
+        # (msg_id, error) directly; the Fw_Version_Info handler gets the
+        # NUL-stripped version string, with the FwValid byte snapshotted from
+        # the driver's `fw_valid` module state (set by
+        # `_handle_firmware_info` right before the valid-only dispatch — the
+        # same technique the gesture records use for class/edge).
+        sky._on_system_status = lambda msg_id, error: self.records.append(
+            {'kind': 'system_status', 'msg_id': msg_id, 'error': error})
+        sky._on_firmware_version = lambda version: self.records.append(
+            {'kind': 'firmware_info',
+             'fw_valid': self.sky.fw_valid, 'version': version})
 
         sky._on_touch = {
             kind: {'all': self._capture(kind)} for kind in ('touch', 'tap', 'doubletap')}

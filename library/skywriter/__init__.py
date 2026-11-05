@@ -65,6 +65,21 @@ gesture = 0
 gesture_class = 0
 gesture_edge = False
 
+# Last received control frames, decoded per Interface.pdf (the sensor's
+# datasheet): the System_Status acknowledge (§3.6 / Table 3-8) and the
+# Fw_Version_Info report (§4.3, Table 4-5/4-6). Handlers read these alongside
+# their own arguments, like x/y/z:
+#   system_status       — the control message that was acknowledged
+#                         (Set_Runtime_Parameter 0xA2 = 170, ...)
+#   system_status_error — the acknowledge's 16-bit error code (0 = applied)
+#   fw_valid            — FwValid status byte; only 0xAA is a valid library
+#   fw_version          — the NUL-stripped version string (only meaningful
+#                         for a valid report; empty otherwise)
+system_status = 0
+system_status_error = 0
+fw_valid = 0
+fw_version = ''
+
 io_error_count = 0
 
 _worker = None
@@ -78,6 +93,12 @@ _on_garbage = None
 # Circle handler: single callable receiving the direction as a string
 # ('clockwise' or 'counter-clockwise'), like the flick/garbage registries.
 _on_circle = None
+# Optional control-frame handlers (fix item P3.11b): the parsed System_Status
+# acknowledge gets (msg_id, error); the valid Fw_Version_Info report gets the
+# NUL-stripped version string. Module state (system_status, system_status_error,
+# fw_valid, fw_version) carries the values alongside, like x/y/z.
+_on_system_status = None
+_on_firmware_version = None
 _is_setup = False
 
 
@@ -331,8 +352,18 @@ def _handle_sensor_data(data):
 
 
 def _handle_status_info(data):
-    # error = data[7] << 8 | data[6]
-    pass
+    # System_Status (0x15) receive format (Interface.pdf §4.1; example in
+    # §3.6, Table 3-8): payload byte 0 = MsgID (the control message being
+    # acknowledged, e.g. Set_Runtime_Parameter 0xA2 = 170), byte 1 =
+    # MaxCmdSize (informational), bytes 2-3 = ErrorCode little-endian
+    # ("0" = the command was applied correctly).
+    global system_status, system_status_error
+
+    system_status = data[0]
+    system_status_error = data[3] << 8 | data[2]
+
+    if callable(_on_system_status):
+        _on_system_status(system_status, system_status_error)
 
 
 def _handle_firmware_info(data):
@@ -344,6 +375,15 @@ def _handle_firmware_info(data):
     # d_loader_version = data[4:7]
     # d_fw_st = data[7]
 
+    global fw_valid, fw_version
+
+    # The FwValid state travels with every report; the version string is
+    # only meaningful for a valid image (below). Fix item P3.11b: both are
+    # also surfaced as module state (like x/y/z) for handlers to read, and
+    # a registered `fw_version()` handler receives the NUL-stripped string.
+    fw_valid = d_fw_valid
+    fw_version = ''
+
     # Interface.pdf §4.3 (Table 4-6) defines exactly three FwValid values:
     # 0xAA = a valid GestIC Library is available, 0x00 = empty, 0x0A = an
     # invalid library was stored or the last firmware update failed. Only an
@@ -352,10 +392,15 @@ def _handle_firmware_info(data):
     if d_fw_valid == 0xAA:
         # The version string is only meaningful for a valid image: with an
         # empty or invalid library (or undefined values), those 120 bytes are
-        # not a version string at all.
-        d_fw_version = ''.join(map(chr, data[8:]))
+        # not a version string at all. The field is NUL-padded, so strip at
+        # the first NUL (the canonical/decoder-level record carries exactly
+        # the readable string).
+        fw_version = ''.join(map(chr, data[8:])).split('\x00')[0]
 
-        print(d_fw_version)
+        print(fw_version)
+
+        if callable(_on_firmware_version):
+            _on_firmware_version(fw_version)
 
     elif d_fw_valid == 0x00:
         raise Exception("No valid GestIC Library could be located")
@@ -587,6 +632,43 @@ def airwheel():
     def register(handler):
         global _on_airwheel
         _on_airwheel = handler
+
+    return register
+
+
+def system_status():
+    '''Bind an action to System_Status control messages (ID 0x15)
+
+    The handler receives the acknowledged control message's ID and its
+    16-bit error code: system_status(msg_id, error). msg_id is e.g.
+    Set_Runtime_Parameter (0xA2 = 170), and error 0 means the control
+    message was applied correctly (Interface.pdf §3.6 / Table 3-8).
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_system_status
+        _on_system_status = handler
+
+    return register
+
+
+def fw_version():
+    '''Bind an action to Fw_Version_Info control messages (ID 0x83)
+
+    The handler receives the version string — only delivered when the
+    sensor reports a valid GestIC library (FwValid 0xAA, Interface.pdf
+    §4.3 Table 4-6). The last report's FwValid byte and NUL-stripped
+    string are also available as the `fw_valid` / `fw_version` module
+    state, like x/y/z.
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_firmware_version
+        _on_firmware_version = handler
 
     return register
 

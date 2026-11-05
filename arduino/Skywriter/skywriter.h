@@ -34,6 +34,26 @@
 #define SW_SYS_AIRWHEEL            1 << 1
 
 /*
+  Control-frame receive formats (fix item P3.11b, deviation D9).
+  System_Status (0x15) — Interface.pdf §4.1, example §3.6 Table 3-8:
+    payload byte 0 = MsgID acknowledged (e.g. Set_Runtime_Parameter 0xA2),
+    byte 1 = MaxCmdSize (informational), bytes 2-3 = ErrorCode little-endian
+    ("0" = the command was applied correctly).
+  Fw_Version_Info (0x83) — Interface.pdf §4.3 Table 4-5:
+    payload byte 0 = FwValid (only 0xAA = valid GestIC Library, Table 4-6),
+    bytes 8..127 = FwVersion, a 120-byte ASCII field, NUL-padded.
+  Payload capacities: no sensor message is longer than Fw_Version_Info, so
+  one request of this size always covers a whole frame; the driver trims to
+  the frame's own size field before decoding.
+*/
+#define SW_MAX_FRAME_SIZE          132 // header 4 + payload 128 (Fw_Version_Info)
+#define SW_PAYLOAD_SYSTEM_STATUS_ID    0 // 1 byte
+#define SW_PAYLOAD_SYSTEM_STATUS_ERROR 2 // 2 bytes, little-endian
+#define SW_PAYLOAD_FW_INFO_VALID       0 // 1 byte: only 0xAA is valid (Table 4-6)
+#define SW_PAYLOAD_FW_INFO_VERSION     8 // 120 bytes, ASCII, NUL-padded
+#define SW_FW_VERSION_FIELD_SIZE   120
+
+/*
   Constants for identifying tap
 */
 #define SW_DOUBLETAP_CENTER        0
@@ -69,6 +89,13 @@ class _SkyWriter
     void onAirwheel( void (*)(float) );
     void onGesture( void (*)(unsigned char) );
     void onXYZ( void (*)(unsigned int, unsigned int, unsigned int) );
+    // Optional control-frame callbacks (fix item P3.11b): every System_Status
+    // acknowledge reports (msg_id, error); every *valid* Fw_Version_Info
+    // report (FwValid 0xAA) reports (fw_valid, nul-stripped version string).
+    // The C++ counterpart of the Python driver's `system_status()` /
+    // `fw_version()` decorators.
+    void onSystemStatus( void (*)(unsigned char, unsigned int) );
+    void onFirmwareVersion( void (*)(unsigned char, const char*) );
     unsigned char last_gesture, last_touch;
     // Attributes of the last recognized gesture, decoded from the full
     // 32-bit GestureInfo word (Interface.pdf §4.5, Table 4-10) — the C++
@@ -88,6 +115,8 @@ class _SkyWriter
     void (*handle_airwheel)(float)    = NULL;
     void (*handle_gesture)(unsigned char) = NULL;
     void (*handle_xyz)(unsigned int, unsigned int, unsigned int);
+    void (*handle_system_status)(unsigned char, unsigned int) = NULL;
+    void (*handle_firmware_version)(unsigned char, const char*) = NULL;
     // AirWheel counter reference: `airwheel_counter_valid` stands in for the
     // Python driver's `_lastrotation = None` sentinel — false until a frame
     // with valid AirWheel data establishes the baseline, and cleared again by
@@ -95,8 +124,16 @@ class _SkyWriter
     unsigned char lastrotation = 0;
     bool airwheel_counter_valid = false;
     unsigned char xfer, rst, addr;
-    unsigned char command_buffer[32];
+    // Frame receiving buffer: sized for the longest sensor message,
+    // Fw_Version_Info (0x83, 132 bytes), so a whole frame — including its
+    // 120-byte version field — is captured in one read. Before P3.11b this
+    // was 32 bytes, which truncated the version string to its first ~20
+    // characters. The copy loop is bounded by its size (never writes past
+    // the terminator index).
+    unsigned char command_buffer[SW_MAX_FRAME_SIZE];
     void handle_sensor_data(unsigned char* data);
+    void handle_status_info(unsigned char* data);
+    void handle_firmware_info(unsigned char* data);
 };
 
 namespace { _SkyWriter Skywriter; }

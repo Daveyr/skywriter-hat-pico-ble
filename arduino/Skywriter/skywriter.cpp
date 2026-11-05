@@ -21,7 +21,14 @@ void _SkyWriter::poll(){
     pinMode(this->xfer, OUTPUT);
     digitalWrite(this->xfer, LOW);
     
-    Wire.requestFrom(this->addr, (unsigned char)32);
+    // One read request sized for the longest sensor message
+    // (Fw_Version_Info, SW_MAX_FRAME_SIZE bytes): a whole frame must be
+    // captured in this single read, so control frames like the firmware
+    // version string arrive complete. Shorter frames simply return fewer
+    // bytes. Before P3.11b this read only 32 bytes, which cut the 120-byte
+    // version field of an Fw_Version_Info frame to its first ~20
+    // characters.
+    Wire.requestFrom(this->addr, (unsigned char)SW_MAX_FRAME_SIZE);
     
     unsigned char d_size,d_flags,d_seq,d_ident;
     
@@ -37,8 +44,12 @@ void _SkyWriter::poll(){
     
     this->command_buffer[0] = '\0';
     
+    // Copy the remaining frame bytes. Bounded by the buffer size: never
+    // write past the terminator index (the former unbounded loop relied on
+    // the old 32-byte request exactly filling a 32-byte buffer — a hazard
+    // that must not return with the larger request).
     unsigned char i = 0;
-    while(Wire.available()){
+    while(Wire.available() && i < (SW_MAX_FRAME_SIZE - SW_HEADER_SIZE)){
       this->command_buffer[i] = Wire.read();
       i++;
     }
@@ -49,10 +60,12 @@ void _SkyWriter::poll(){
         this->handle_sensor_data(this->command_buffer);
         break;
       case 0x15:
-        // Status info - Unimplemented
+        // System_Status acknowledge, decoded as a control event (P3.11b).
+        this->handle_status_info(this->command_buffer);
         break;
       case 0x83:
-        // Firmware data - Unimplemented
+        // Fw_Version_Info report, decoded as a control event (P3.11b).
+        this->handle_firmware_info(this->command_buffer);
         break;
     }
     
@@ -66,6 +79,48 @@ void _SkyWriter::onTouch(    void (*function)(unsigned char) ){this->handle_touc
 void _SkyWriter::onAirwheel( void (*function)(float)          ){this->handle_airwheel = function;}
 void _SkyWriter::onGesture(  void (*function)(unsigned char) ){this->handle_gesture  = function;}
 void _SkyWriter::onXYZ(      void (*function)(unsigned int,unsigned int,unsigned int) ){this->handle_xyz  = function;}
+void _SkyWriter::onSystemStatus( void (*function)(unsigned char, unsigned int) ){this->handle_system_status = function;}
+void _SkyWriter::onFirmwareVersion( void (*function)(unsigned char, const char*) ){this->handle_firmware_version = function;}
+
+void _SkyWriter::handle_status_info(unsigned char* data){
+  // System_Status (0x15) — Interface.pdf §4.1, example in §3.6 Table 3-8:
+  // payload byte 0 = MsgID acknowledged (e.g. Set_Runtime_Parameter 0xA2 =
+  // 170), byte 1 = MaxCmdSize (informational), bytes 2-3 = ErrorCode
+  // little-endian ("0" = the message was applied correctly). Mirrors the
+  // Python driver's `_handle_status_info`.
+  if( this->handle_system_status == NULL ) return;
+
+  this->handle_system_status(
+    data[SW_PAYLOAD_SYSTEM_STATUS_ID],
+    (unsigned int)( data[SW_PAYLOAD_SYSTEM_STATUS_ERROR + 1] << 8
+                  | data[SW_PAYLOAD_SYSTEM_STATUS_ERROR] )
+  );
+}
+
+void _SkyWriter::handle_firmware_info(unsigned char* data){
+  // Fw_Version_Info (0x83) — Interface.pdf §4.3, Table 4-5/4-6: payload
+  // byte 0 = FwValid; only an exact 0xAA is a valid GestIC Library (the
+  // D6 rule; the Python driver raises for every other value and emits no
+  // event, so emitting only here keeps both drivers' event streams in
+  // parity). The FwVersion field is payload bytes 8..127, ASCII,
+  // NUL-padded; the callback receives it NUL-stripped, exactly what the
+  // canonical-record grammar expects.
+  if( data[SW_PAYLOAD_FW_INFO_VALID] != 0xAA ) return;
+
+  char version[SW_FW_VERSION_FIELD_SIZE + 1];
+  unsigned char j;
+  // Copy until the field's own length, stopping either at the NUL padding
+  // or at the receive-buffer terminator (where the frame ended).
+  for( j = 0; j < SW_FW_VERSION_FIELD_SIZE
+              && data[SW_PAYLOAD_FW_INFO_VERSION + j] != 0; j++ ){
+    version[j] = (char)data[SW_PAYLOAD_FW_INFO_VERSION + j];
+  }
+  version[j] = '\0';
+
+  if( this->handle_firmware_version == NULL ) return;
+
+  this->handle_firmware_version(data[SW_PAYLOAD_FW_INFO_VALID], version);
+}
 
 void _SkyWriter::handle_sensor_data(unsigned char* data){
 /*

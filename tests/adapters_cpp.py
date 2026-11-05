@@ -24,6 +24,17 @@ parsed into native records:
 - ``{"kind": "airwheel", "degrees": float}`` rotation delta in degrees
                                              (quantized to 11.25-degree
                                              sensor steps)
+- ``{"kind": "system_status", "msg_id": int, "error": int}``
+                                             System_Status (0x15) acknowledge:
+                                             the control command being
+                                             acknowledged (e.g. 170 =
+                                             Set_Runtime_Parameter 0xA2) and
+                                             its 16-bit error code (P3.11b)
+- ``{"kind": "firmware_info", "fw_valid": int, "version": str}``
+                                             Fw_Version_Info (0x83): FwValid
+                                             byte and NUL-stripped version
+                                             string; only valid 0xAA reports
+                                             are emitted (P3.11b)
 
 The host has no system C++ compiler in this container (Alpine, no sudo), so
 the compiler is resolved as: ``g++``/``c++`` on PATH → ``zig c++`` on PATH →
@@ -171,6 +182,21 @@ class CppDecoderAdapter(ReplayAdapter):
             # of the AirWheel decoder (and for the Python parity compare,
             # which tolerates 1e-6 float noise only).
             return {'kind': 'airwheel', 'degrees': float(parts[2])}
+        if kind == 'systemstatus':
+            # `EV SYSTEMSTATUS <msg_id> <error>` — the System_Status (0x15)
+            # decode (P3.11b): acknowledged command id + 16-bit error code.
+            return {'kind': 'system_status', 'msg_id': int(parts[2]),
+                    'error': int(parts[3])}
+        if kind == 'fwversion':
+            # `EV FWVERSION <fw_valid> <version string>` — the
+            # Fw_Version_Info (0x83) decode (P3.11b): only valid (0xAA)
+            # reports are emitted. The version string CONTAINS a literal
+            # space (ISO build timestamp "2013/11/08 13:03:00"), so it must
+            # be parsed as the remainder of the line, not as one token —
+            # whitespace-splitting tokens only up to fw_valid.
+            parts = line.split(None, 3)
+            return {'kind': 'firmware_info', 'fw_valid': int(parts[2]),
+                    'version': parts[3]}
         raise ValueError(f'unrecognised EV line: {line!r}')
 
     def finish(self, clock):

@@ -30,8 +30,8 @@ def sky():
 def _payload_with_fw_valid(sky, fw_valid):
     '''The recorded F17 payload's frame with a given FwValid byte.
 
-    F17 is the vendor §3.5.2 example message (24 bytes: 4-byte header +
-    20-byte payload; the payload is zero-padded to full length in the
+    F17 is the vendor §3.5.2 example message (132 bytes: 4-byte header +
+    128-byte payload; the FwVersion field is 120 bytes, NUL-padded in the
     fixture), so replacing its payload byte 0 gives a well-formed
     Fw_Version_Info frame carrying exactly the status we want to probe.
     '''
@@ -46,6 +46,28 @@ def test_recorded_fixture_payload_is_fw_valid(sky):
     payload = list(fixtures.load_frame('F17_fw_version_valid'))[4:]
     assert payload[0] == 0xAA      # sanity: the fixture really is the valid case
     assert sky._handle_firmware_info(payload) is None
+    # P3.11b: the decoded report travels as module state, so handlers and
+    # the replay-harness adapter can read it alongside the callback.
+    assert sky.fw_valid == 0xAA
+    assert sky.fw_version == ("1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;"
+                              "f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;"
+                              "t:2013/11/08 13:03:00")
+
+
+def test_valid_report_fires_the_firmware_version_callback(sky):
+    '''P3.11b: a registered `fw_version()` handler (private global here, per
+    the adapter contract) receives the NUL-stripped version string — exactly
+    the canonical `firmware_info` event's value.'''
+    payload = list(fixtures.load_frame('F17_fw_version_valid'))[4:]
+    seen = []
+    saved = sky._on_firmware_version
+    sky._on_firmware_version = lambda v: seen.append(v)
+    try:
+        sky._handle_firmware_info(payload)
+    finally:
+        sky._on_firmware_version = saved
+    assert seen == [sky.fw_version]     # one event, same string as the state
+    assert seen[0].startswith('1.0.0;p:HillstarV01;')
 
 
 @pytest.mark.parametrize('fw_valid,message_fragment', [

@@ -13,6 +13,7 @@
     "2026-11-05 revision (P3.5b): circle gestures (wire codes 6/7) are now dispatched by the Python driver (circle(direction) decorator; deviation D10 closed). F21/F22 give the corpus its first AirWheel-disabled mask (bit 3 off, 0x0003): only fields up to GestureInfo are present, so the fixed offsets before it stay valid.",
     "2026-11-05 revision (P3.7): the Python driver now decodes the full 32-bit GestureInfo word and carries gesture class (bits 12-15) and edge-flick flag (bit 16) onto every gesture event; the keys_pending annotations narrowed to 'cpp' until the Arduino driver gets the same decode (fix item P3.11, deviation D7). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
     "2026-11-05 revision (P3.11): the Arduino driver decodes the full 32-bit GestureInfo word too, so every gesture expectation in this manifest is now a hard assertion on BOTH drivers (deviation D7 closed; the keys_pending annotations are gone). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
+    "2026-11-05 revision (P3.11b): the control frames are surfaced as canonical events — System_Status (0x15) acks become {\"event\": \"system_status\", \"msg_id\": <acknowledged command id>, \"error\": <16-bit LE error code>} and valid Fw_Version_Info (0x83) reports become {\"event\": \"firmware_info\", \"fw_valid\": <FwValid byte>, \"version\": <NUL-stripped string>} (deviation D9 closed; the omit_pending annotations on status_ack / fw_version_valid are gone, so both events are hard-asserted on BOTH drivers). For the Arduino driver this also meant reading whole frames: poll() now requests SW_MAX_FRAME_SIZE (132) bytes so the 120-byte version field arrives complete (before, a 32-byte read truncated it).",
     "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout."
   ],
   "frames": {
@@ -345,12 +346,11 @@
       "frames": ["F16_status_ack_a2"],
       "expect": {
         "canonical": [
-          {"event": "system_status", "msg_id": 170, "error": 0,
-           "omit_pending": {"deviation": "D9", "drivers": ["python", "cpp"]}}
+          {"event": "system_status", "msg_id": 162, "error": 0}
         ],
         "hid": []
       },
-      "note": "System_Status (0x15) reply: Set_Runtime_Parameter id 0xA2 acknowledged with error 0x0000. Control frames produce no HID output; neither driver currently surfaces them as records (D9, fix item P3.11b)."
+      "note": "System_Status (0x15) reply: Set_Runtime_Parameter id 0xA2 = 162 (decimal) acknowledged with error 0x0000 (Interface.pdf §4.1, Table 3-8: MsgID 0xA2, MaxCmdSize 0x34, ErrorCode little-endian). Revision 2026-11-05 (P3.11b): surfacing this as a hard assertion exposed a stale expectation value — msg_id was written as 170 (decimal for 0xAA, the FwValid byte) while the datasheet's decoded MsgID is 0xA2 = 162; corrected, it never ran before because the old omit_pending annotation skipped the event entirely. Surfaced as a canonical control event by both drivers 2026-11-05 (D9 closed, fix item P3.11b); control frames produce no HID output."
     },
     {
       "name": "fw_version_valid",
@@ -358,12 +358,11 @@
       "expect": {
         "canonical": [
           {"event": "firmware_info", "fw_valid": 170,
-           "version": "1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00",
-           "omit_pending": {"deviation": "D9", "drivers": ["python", "cpp"]}}
+           "version": "1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00"}
         ],
         "hid": []
       },
-      "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf §4.3 — the Python driver's acceptance values were fixed 2026-11-05, P3.6, pinned in tests/test_firmware_info.py), version string NUL-terminated. Control frames produce no HID output."
+      "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf §4.3 — the Python driver's acceptance values were fixed 2026-11-05, P3.6, pinned in tests/test_firmware_info.py), version string NUL-stripped. Surfaced as a canonical control event by both drivers 2026-11-05 (D9 closed, fix item P3.11b). Control frames produce no HID output."
     }
   ]
 }

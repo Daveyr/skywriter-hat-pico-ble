@@ -9,12 +9,14 @@ These prove the mechanism the decoder/mapping work items will build on:
 - plumbing sanity pins (what already matches the spec today): position
   decode (F01), flick dispatch (F02), tap dispatch (F09) on both adapters.
 
-Spec-behaviour assertions for the known-red decoder deviations (D8, D9) come
-with the fix items P3.11b–P3.19 and the structured naming of P3.2 — this file
+Spec-behaviour assertions for the known-red decoder deviation (D8) come
+with the fix items P3.12–P3.19 and the structured naming of P3.2 — this file
 deliberately asserts only what is true today. (D4, touch every-set-bit
 dispatch, was closed 2026-11-05 with P3.10; D7, the Arduino driver's gesture
 class/edge attributes, was closed 2026-11-05 with P3.11 — the C++ flick pin
-below now asserts the full record.)
+below now asserts the full record; D9, the control-frame canonical events,
+was closed 2026-11-05 with P3.11b — both drivers surface
+`system_status`/`firmware_info` records now.)
 '''
 
 import time
@@ -71,8 +73,9 @@ def test_every_scenario_replays_on_every_adapter(manifest, cpp_adapter):
     # The real value here: no scenario may blow up either driver. Whether each
     # scenario produces *any* record is checked by the plumbing pins below and,
     # per scenario, by the spec-assertion items (P3.2, P3.3+): some scenarios
-    # legitimately produce nothing (e.g. "gesture in progress" emits no event,
-    # 0x15/0x83 control frames are no-ops in both drivers today).
+    # legitimately produce nothing (e.g. "gesture in progress" emits no event;
+    # the 0x15/0x83 control frames emit exactly one control event each since
+    # P3.11b).
     python_adapter = adapters.get_adapter('python')
 
     for scenario in manifest['scenarios']:

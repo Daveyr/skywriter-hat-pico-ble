@@ -42,9 +42,15 @@ the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
 without the ledger being updated. The `specs/README.md` deviation rows —
 D8 (stale
-AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
+AGENTS.md gotcha) — is therefore guaranteed
 to flip its annotation to a hard assertion in the same change that closes it.
-(D3, the Arduino AirWheel wrap, was closed 2026-11-05 the same way: commit
+(D9, the control-frame events `status_ack` / `fw_version_valid`, was closed
+2026-11-05 the same way with fix item P3.11b: the Python and Arduino drivers
+both surface `system_status` / `firmware_info` canonical events now — the
+Arduino `poll()` also reads whole frames (132 bytes) so its 120-byte version
+string arrives complete — and both scenario expectations are hard assertions
+on both drivers with no tolerance left.) (D3, the Arduino AirWheel wrap, was
+closed 2026-11-05 the same way: commit
 P3.9 brought `skywriter.cpp` the Python driver's signed 8-bit counter
 difference and silent first-frame baseline, so the `airwheel_wrap` scenario
 now hard-asserts its +45° event on both drivers. D4, touch every-set-bit

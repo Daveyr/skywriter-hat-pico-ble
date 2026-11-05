@@ -20,8 +20,11 @@ adapter) and checked against its machine-checkable expectations:
   a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
   closed 2026-11-05).
 
-Known-red decoder defects (D8, D9 — specs/README.md) are annotated in the
-manifest, never swallowed silently by these tests.
+Known-red decoder defects (D8 — specs/README.md) are annotated in the
+manifest, never swallowed silently by these tests. (D9, the control-frame
+canonical events, was closed 2026-11-05 with fix item P3.11b: both drivers
+surface `system_status` / `firmware_info` records, so the `status_ack` /
+`fw_version_valid` expectations are hard assertions on both drivers.)
 '''
 
 from collections import defaultdict
