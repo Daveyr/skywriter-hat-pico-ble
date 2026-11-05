@@ -75,8 +75,21 @@ MAPPING_ENGINE_ARMED = frozenset({
     'flick_west_east',
     'flick_east_west',
     'edge_flick_east_west',
+    'flick_south_north',
+    'flick_north_south',
     'circle_clockwise',
     'circle_counter_clockwise',
+    # Full §6 table on real replayed frames (P3.15b fixture-corpus gap fill):
+    # tap(east/west/north/south) → right/middle click + Page Up/Down,
+    # reserved doubletap(east/west) → nothing, north/south hold auto-scroll
+    # (hold-start notch, 100 ms cadence, stop at release-by-silence).
+    'tap_east',
+    'tap_west',
+    'tap_north',
+    'tap_south',
+    'doubletap_east_west_reserved',
+    'touch_north_hold_autoscroll',
+    'touch_south_hold_autoscroll',
     # Events the §6 table maps to nothing must provably stay silent on the
     # HID side: garbage gesture rows and the control frames.
     'gesture_in_progress',

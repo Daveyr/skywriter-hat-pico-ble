@@ -201,10 +201,10 @@ Fixture names refer to `fixtures/manifest.json`.
 |---|---|---|
 | AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work; lift-off re-baselines; move reports coalesce to ≤ one per connection interval with deltas accumulated. | F01, F19 (jump), `pointer_move` (deltas + cadence), `pointer_lift_off_rebaseline` (lift-off), probe |
 | AC-MAP-02 | Touch press → button down on first frame; repeats don't re-trigger; release after `TOUCH_RELEASE_MS` without frames. | F07, F08 (sequence), F18 |
-| AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10 |
+| AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10, F26–F29 (`tap_east`, `tap_west`, `tap_north`, `tap_south`), F30+F31 (`doubletap_east_west_reserved`) |
 | AC-MAP-04 | Airwheel emits 11.25°-quantized notches, signed correctly, and **survives counter wrap** (255→0 is +1 step, not −255). | F11–F15 (sequences) |
-| AC-MAP-05 | Gestures map per §6; garbage and in-progress frames emit nothing; edge-flick flag is carried in the canonical event. | F02–F06 |
+| AC-MAP-05 | Gestures map per §6; garbage and in-progress frames emit nothing; edge-flick flag is carried in the canonical event. | F02–F06, F32/F33 (`flick_south_north`, `flick_north_south`) |
 | AC-MAP-06 | A frame carrying touch + airwheel + position produces **all** corresponding outputs. | F18 |
 | AC-MAP-07 | Lift-off releases all buttons and resets the pointer baseline and airwheel accumulator. | probe + F07/F08 sequence (release by silence) |
-| AC-MAP-08 | Media/consumer actions appear on the consumer-control report; keyboard actions on the keyboard report; nothing is emitted on the wrong report. | `hw/ble_hid_probe.py` |
+| AC-MAP-08 | Media/consumer actions appear on the consumer-control report; keyboard actions on the keyboard report; nothing is emitted on the wrong report. | `hw/ble_hid_probe.py`; offline half replay-asserted in the corpus scenarios (`tap_north`/`tap_south` keyboard, `flick_*`/`circle_*` consumer, `doubletap_east_west_reserved` + `touch_*_hold_autoscroll` silence/wheel records) |
 | AC-MAP-09 | All AC-MAP-01…06 pass against the **Python** decoder and the **Arduino** decoder with identical canonical events (parity), modulo the deviations tracked in `specs/README.md` (which must be fixed to close this criterion). | fixture replay both drivers |

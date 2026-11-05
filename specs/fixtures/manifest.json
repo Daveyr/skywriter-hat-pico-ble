@@ -16,6 +16,7 @@
   "2026-11-05 revision (P3.11b): the control frames are surfaced as canonical events \u2014 System_Status (0x15) acks become {\"event\": \"system_status\", \"msg_id\": <acknowledged command id>, \"error\": <16-bit LE error code>} and valid Fw_Version_Info (0x83) reports become {\"event\": \"firmware_info\", \"fw_valid\": <FwValid byte>, \"version\": <NUL-stripped string>} (deviation D9 closed; the omit_pending annotations on status_ack / fw_version_valid are gone, so both events are hard-asserted on BOTH drivers). For the Arduino driver this also meant reading whole frames: poll() now requests SW_MAX_FRAME_SIZE (132) bytes so the 120-byte version field arrives complete (before, a 32-byte read truncated it).",
   "2026-11-05 revision (P3.13): the mapping engine implements \u00a74 touch semantics and the \u00a76 button rows \u2014 touch(center) hold presses and later releases the left button (press-once, repeat-inert, release-by-silence per TOUCH_RELEASE_MS, lift-off releases all held buttons), tap(center/east/west) \u2192 left/right/middle click of TAP_CLICK_MS, doubletap(center) \u2192 double click; touch/tap/doubletap on the zones whose rows land with P3.15 (north/south keyboard taps, north/south hold auto-scroll, reserved doubletap east/west) emit nothing yet. touch_press_and_release's expect.hid is re-authored to the exact four records the rule produces for its 250 ms gap (see its note) and the four touch scenarios are replay-asserted on the mapping engine; sub-250 ms repeat timing is pinned by tests/test_mapper_unit.py because the Python driver rate-limits repeat touch callbacks by design (4 Hz default).",
   "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout.",
+  "2026-11-05 revision (P3.15b): the corpus's remaining §6-row gaps are filled with real replayed frames — tap(east/west/north/south) → right/middle click + Page Up/Down (F26–F29), the reserved doubletap(east/west) → nothing rows (F30/F31, hard-asserted as decoder events and pinned silent on the HID side), the vertical S→N/N→S volume flicks (F32/F33), and the north/south hold auto-scroll rows on real touch frames (F34/F35: hold-start notch + 100 ms cadence + stop-at-release, three records each). Every new scenario is replay-asserted on the mapping engine end-to-end (MAPPING_ENGINE_ARMED), covering the fixture side of AC-MAP-02/03/05/08 the ledger item P3.15b listed.",
   "2026-11-05 revision (P3.15): the mapping engine implements the FULL \u00a76 table \u2014 the flick/circle gesture rows now dispatch consumer presses end-to-end (the five gesture scenarios are replay-asserted on the mapping engine), the tap(north/south) keyboard and doubletap(north/south) media rows and the \u00a76 hold auto-scroll (touch(north) \u2192 wheel \u22121 per 100 ms, touch(south) \u2192 +1) are live, and the deliberate no-output rows (garbage gesture, reserved doubletap(east/west)) are pinned silent (garbage_gesture replay-asserted silent; doubletap(east/west) pinned by tests/test_mapper_unit.py). The P3.13 note above is historical: north/south auto-scroll and keyboard taps are no longer silent. Auto-scroll's first notch emits at hold start (engine decision, see the fix_plan P3.15 Done entry), so a future north/south hold scenario must expect it."
  ],
  "frames": {
@@ -143,6 +144,56 @@
    "file": "F25_position_move_next.hex",
    "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
    "desc": "Valid position x=3316 (+256 from F24), y=488, z=200: exactly one GAIN-unit (1/256 of the field) more movement, for the pointer_move scenario's report-coalescing assertion (\u00a73 rule 6: deltas accumulate across coalesced frames)."
+  },
+  "F26_tap_east": {
+   "file": "F26_tap_east.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap East (bit 8): the \u00a76 secondary-click row's sensor event. TouchInfo word 00 01 00 00."
+  },
+  "F27_tap_west": {
+   "file": "F27_tap_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap West (bit 6): the \u00a76 middle-click row's sensor event. TouchInfo word 40 00 00 00."
+  },
+  "F28_tap_north": {
+   "file": "F28_tap_north.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap North (bit 7): the \u00a76 keyboard Page Up row's sensor event. TouchInfo word 80 00 00 00."
+  },
+  "F29_tap_south": {
+   "file": "F29_tap_south.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap South (bit 5): the \u00a76 keyboard Page Down row's sensor event. TouchInfo word 20 00 00 00."
+  },
+  "F30_doubletap_east": {
+   "file": "F30_doubletap_east.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Double Tap East (bit 13): one of the \u00a76 reserved-to-nothing rows. TouchInfo word 00 20 00 00."
+  },
+  "F31_doubletap_west": {
+   "file": "F31_doubletap_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Double Tap West (bit 11): one of the \u00a76 reserved-to-nothing rows. TouchInfo word 00 08 00 00."
+  },
+  "F32_flick_south_north": {
+   "file": "F32_flick_south_north.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick South->North, gesture class 1 (flick), clean word 04 10 00 00: the \u00a76 Volume Increment row."
+  },
+  "F33_flick_north_south": {
+   "file": "F33_flick_north_south.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick North->South, gesture class 1 (flick), clean word 05 10 00 00: the \u00a76 Volume Decrement row."
+  },
+  "F34_touch_north_hold": {
+   "file": "F34_touch_north_hold.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Touch North (bit 2, counter 9): the \u00a76 hold auto-scroll row's sensor event (touch word 04 00 09 00). The scenario advances a simulated hold to exercise the 100 ms cadence."
+  },
+  "F35_touch_south_hold": {
+   "file": "F35_touch_south_hold.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Touch South (bit 0, counter 9): the \u00a76 hold auto-scroll row's sensor event (touch word 01 00 09 00). The scenario advances a simulated hold to exercise the 100 ms cadence."
   }
  },
  "scenarios": [
@@ -652,6 +703,235 @@
     "hid": []
    },
    "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf \u00a74.3 \u2014 the Python driver's acceptance values were fixed 2026-11-05, P3.6, pinned in tests/test_firmware_info.py), version string NUL-stripped. Surfaced as a canonical control event by both drivers 2026-11-05 (D9 closed, fix item P3.11b). Control frames produce no HID output."
+  },
+  {
+   "name": "tap_east",
+   "frames": [
+    "F26_tap_east"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "east"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "right",
+      "count": 1,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(east) \u2192 Right click\": one 50 ms click, never leaving a button held (fixture-corpus gap fill, P3.15b) [AC-MAP-03]. Replay-asserted end-to-end on the mapping engine with the rest of the corpus scenarios (P3.15b)."
+  },
+  {
+   "name": "tap_west",
+   "frames": [
+    "F27_tap_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "west"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "middle",
+      "count": 1,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(west) \u2192 Middle click\": the tertiary-click row (fixture-corpus gap fill, P3.15b) [AC-MAP-03]."
+  },
+  {
+   "name": "tap_north",
+   "frames": [
+    "F28_tap_north"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "north"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "keyboard",
+      "action": "press",
+      "key": "page_up",
+      "usage": 78
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(north) \u2192 Keyboard Page Up\": the action goes on the KEYBOARD report, not the mouse report \u2014 nothing is emitted on a wrong channel (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+  },
+  {
+   "name": "tap_south",
+   "frames": [
+    "F29_tap_south"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "south"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "keyboard",
+      "action": "press",
+      "key": "page_down",
+      "usage": 79
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(south) \u2192 Keyboard Page Down\": the Page Up row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+  },
+  {
+   "name": "doubletap_east_west_reserved",
+   "frames": [
+    "F30_doubletap_east",
+    "F31_doubletap_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "doubletap",
+      "zone": "east"
+     },
+     {
+      "event": "doubletap",
+      "zone": "west"
+     }
+    ],
+    "hid": []
+   },
+   "note": "\u00a76 \"doubletap(east) / doubletap(west) \u2192 nothing (reserved)\": the decoder contract still produces both events (hard-asserted on both drivers \u2014 different zones, so the Python driver's per-zone touch repeat limiter cannot suppress the second frame), and the mapping table deliberately maps both to nothing \u2014 expect.hid pins that silence on the HID side (fixture-corpus gap fill, P3.15b; also pinned at mapper-call granularity in tests/test_mapper_unit.py since P3.15 so a remap to a real action cannot sneak in untested) [AC-MAP-08's nothing-on-the-wrong-report half]."
+  },
+  {
+   "name": "flick_south_north",
+   "frames": [
+    "F32_flick_south_north"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 4,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 233
+     }
+    ]
+   },
+   "note": "\u00a76 \"gesture(4 \u2026 flick S\u2192N) \u2192 Consumer Volume Increment\": the vertical flick the corpus lacked (fixture-corpus gap fill, P3.15b) [AC-MAP-05, AC-MAP-08]."
+  },
+  {
+   "name": "flick_north_south",
+   "frames": [
+    "F33_flick_north_south"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 5,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 234
+     }
+    ]
+   },
+   "note": "\u00a76 \"gesture(5 \u2026 flick N\u2192S) \u2192 Consumer Volume Decrement\": the Volume Increment row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-05, AC-MAP-08]."
+  },
+  {
+   "name": "touch_north_hold_autoscroll",
+   "frames": [
+    "F34_touch_north_hold"
+   ],
+   "time_gap_ms": 350,
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "north"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     }
+    ]
+   },
+   "note": "\u00a76 \"touch(north) hold \u2192 Auto-scroll up: wheel \u22121 notch per 100 ms while held\", on a real replayed touch frame (fixture-corpus gap fill, P3.15b). After the hold-start frame (t=0) the replay advances 350 ms of simulated silence on the 5 ms tick grid: the first \u22121 notch is the hold-start emission, further ones fire at t=100 and t=200 (the 200 ms tick still counts as held \u2014 TOUCH_RELEASE_MS is compared strictly, so t=200 is not yet a release); the hold releases by silence strictly past 200 ms (t=205) and no further notch ever appears, so exactly three records. Wheel deltas are emitted immediately, un-coalesced (\u00a75's latency principle) [AC-MAP-08; cadence semantics also pinned at mapper-call granularity in tests/test_mapper_unit.py]."
+  },
+  {
+   "name": "touch_south_hold_autoscroll",
+   "frames": [
+    "F35_touch_south_hold"
+   ],
+   "time_gap_ms": 350,
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "south"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     }
+    ]
+   },
+   "note": "\u00a76 \"touch(south) hold \u2192 Auto-scroll down: wheel +1 notch per 100 ms while held\": the north row's opposite-signed twin, same 0/100/200 ms notch timing with the release strictly past 200 ms \u2014 exactly three records (fixture-corpus gap fill, P3.15b) [AC-MAP-08]."
   }
  ]
 }
