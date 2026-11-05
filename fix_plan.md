@@ -98,6 +98,11 @@ docker run -it --rm \
   with it; new fixture frame F20 re-baselines the
   `touch_with_position_and_airwheel` scenario. 22 pytest tests green;
   `run_tests.sh` 4/4.
+  Update (2026-11-05, P3.5b commit): deviation D10 is closed — circle
+  gestures (wire codes 6/7) now dispatch from the Python driver via a new
+  `circle(direction)` decorator; new fixture frames F21/F22 give the corpus
+  its first AirWheel-disabled output mask (bit 3 off). 22 pytest tests;
+  `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -165,20 +170,7 @@ library both use). Python driver fixes go to `library/`.
 
 - [x] P3.3 → done, moved to the Done section below.
 - [x] P3.5 → done, moved to the Done section below.
-- [ ] P3.5b Deviation D10 (new row in `specs/README.md`, discovered while
-      closing D5) — the Python driver silently discards circle gestures
-      (wire codes 6/7, clockwise/counter-clockwise): the gesture branch in
-      `_handle_sensor_data` matches codes 6/7 in the `gestures` list but
-      dispatches only garbage/flick, and `_on_circle` (module line 70) is
-      dead code — nothing can even register into it, since no `circle()`
-      decorator exists. Decide the surface (e.g. a `circle(direction)`
-      decorator, or the canonical `gesture` event path the harness already
-      models for codes 6/7), dispatch it, and note that no fixture
-      currently exercises the AirWheel-disabled mask (bit 3 off) that the
-      spec requires for circles to be recognized — see the §6
-      "Circle/AirWheel exclusivity" note; a synthetic fixture with that
-      mask would be needed to test it. Coordinated with P3.15 (the §6
-      circle→Consumer volume rows).
+- [x] P3.5b → done, moved to the Done section below.
 - [ ] P3.6 Deviation D6 — firmware version valid only when `FwValid == 0xAA`.
 - [ ] P3.7 Deviation D7 — carry gesture attributes (class bits 12–15, edge
       flick bit 16, in-progress bit 31) into the decoded events.
@@ -314,6 +306,34 @@ attribute table limit).
 
 ## Done
 
+- P3.5b — Deviation D10 closed (commit `a716598`): the Python driver no
+  longer silently discards circle gestures. `library/skywriter/__init__.py`
+  now dispatches wire codes 6/7 from `_handle_sensor_data` to a handler
+  registered through the new `@skywriter.circle()` decorator (the direction
+  arrives as the string `'clockwise'` / `'counter-clockwise'`; the previously
+  dead `_on_circle = {}` registry became a single callable like
+  `_on_garbage`). `library/test.py` registers a circle handler too, proving
+  the decorator triggers the full setup() handshake. Sensor constraint noted
+  on the decorator: the GestIC library recognizes circles only with AirWheel
+  disabled (Interface.pdf §4.5 Table 4-10 and the Table A-3 vendor trace
+  "Circle Gesture not recognized because AirWheel is On"), and the default
+  setup() enables AirWheel — so circle events are dormant in the default
+  configuration; the §6 volume rows stay with the mapping engine (P3.15).
+  Fixture corpus: new frames `F21_circle_cw.hex` / `F22_circle_ccw.hex`
+  (vendor-pattern provenance — the Table A-3 circle trace itself shows a
+  code-0 word because AirWheel was on in that session, so the recognized
+  words `06 20 00 00` / `07 20 00 00` are constructed from the Table 4-10
+  GestureInfo encoding: bits 0–7 = code, bits 12–15 = class 2) with
+  scenarios `circle_clockwise` / `circle_counter_clockwise`. These are the
+  first frames with the AirWheel-disabled output mask (`0x0003`, bit 3 off);
+  fields before AirWheelInfo keep their fixed offsets, so the decoders'
+  indexing stays valid — documented in `specs/fixtures/README.md` ("Shorter
+  frames"). Manifest expectations hard-assert `{"event": "gesture",
+  "code": 6|7}` on **both** drivers (the C++ driver already dispatched
+  circles via `onGesture(code)`; `tests/canonical.py` gained a
+  `CIRCLE_CODES` mapping for the Python adapter's direction strings), with
+  class/edge still gated by D7. Ledger: D10 row removed from
+  `specs/README.md`. `bash run_tests.sh` green 4/4; 22 pytest tests.
 - P3.5 — Deviation D5 closed (commit `3cdac11`): `_handle_sensor_data` in
   `library/skywriter/__init__.py` now dispatches the registered `garbage()`
   callback (as `callable(_on_garbage)`, mirroring the flick dispatch) when
