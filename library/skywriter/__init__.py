@@ -305,15 +305,28 @@ def _handle_firmware_info(data):
     # d_param_st = data[3]
     # d_loader_version = data[4:7]
     # d_fw_st = data[7]
-    d_fw_version = ''.join(map(chr, data[8:]))
 
-    print(d_fw_version)
+    # Interface.pdf §4.3 (Table 4-6) defines exactly three FwValid values:
+    # 0xAA = a valid GestIC Library is available, 0x00 = empty, 0x0A = an
+    # invalid library was stored or the last firmware update failed. Only an
+    # exact 0xAA counts as valid — any other value is undefined, and even a
+    # "0x00-like" spelling such as 0x0A must not be read as valid firmware.
+    if d_fw_valid == 0xAA:
+        # The version string is only meaningful for a valid image: with an
+        # empty or invalid library (or undefined values), those 120 bytes are
+        # not a version string at all.
+        d_fw_version = ''.join(map(chr, data[8:]))
 
-    if d_fw_valid == 0:
+        print(d_fw_version)
+
+    elif d_fw_valid == 0x00:
         raise Exception("No valid GestIC Library could be located")
 
-    if d_fw_valid == 0x0A:
+    elif d_fw_valid == 0x0A:
         raise Exception("An invalid GestiIC Library was stored, or the last update failed")
+
+    else:
+        raise Exception("Unknown GestIC Library status (FwValid 0x%02X)" % d_fw_valid)
 
 
 def _do_poll():

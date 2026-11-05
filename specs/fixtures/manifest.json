@@ -350,7 +350,7 @@
         ],
         "hid": []
       },
-      "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf §4.3 — D6 tracks the Python driver's acceptance values), version string NUL-terminated. Control frames produce no HID output."
+      "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf §4.3 — the Python driver's acceptance values were fixed 2026-11-05, P3.6, pinned in tests/test_firmware_info.py), version string NUL-terminated. Control frames produce no HID output."
     }
   ]
 }

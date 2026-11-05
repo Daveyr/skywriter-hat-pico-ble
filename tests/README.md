@@ -39,9 +39,12 @@ the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
 without the ledger being updated. The `specs/README.md` deviation rows — D2
 (Arduino buffer overrun), D3 (airwheel wrap, Arduino side), D4 (touch
-early-return), D6 (firmware validity), D7 (gesture attributes), D8 (stale
+early-return), D7 (gesture attributes), D8 (stale
 AGENTS.md gotcha) and D9 (control-frame events) — are therefore each guaranteed
 to flip its annotation to a hard assertion in the same change that closes it.
+(D6, firmware validity, was closed 2026-11-05 without needing a fixture
+annotation: `_handle_firmware_info`'s now-spec-correct FwValid handling is
+pinned directly in `tests/test_firmware_info.py`.)
 
 Values: positions are raw 16-bit sensor units — the Python driver's ±4-unit
 rounding (it rounds to 4 decimals of raw/65536) is the only tolerated

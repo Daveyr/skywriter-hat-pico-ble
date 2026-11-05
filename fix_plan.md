@@ -171,7 +171,6 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.3 → done, moved to the Done section below.
 - [x] P3.5 → done, moved to the Done section below.
 - [x] P3.5b → done, moved to the Done section below.
-- [ ] P3.6 Deviation D6 — firmware version valid only when `FwValid == 0xAA`.
 - [ ] P3.7 Deviation D7 — carry gesture attributes (class bits 12–15, edge
       flick bit 16, in-progress bit 31) into the decoded events.
 
