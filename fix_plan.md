@@ -91,6 +91,13 @@ docker run -it --rm \
   pytest tests pass (11 harness meta-tests + 7 spec/assertion tests);
   deviation tolerances in the manifest are self-arming against the
   `specs/README.md` ledger (new row D9); `run_tests.sh` still green 4/4.
+  Update (2026-11-05, P3.4 commit): deviation D3 is closed for the Python
+  driver (signed 8-bit AirWheel counter difference + silent re-baseline
+  after a gap — the ledger row now covers only the Arduino side, pending
+  P3.9), and the airwheel-baseline question P3.14a is settled together
+  with it; new fixture frame F20 re-baselines the
+  `touch_with_position_and_airwheel` scenario. 22 pytest tests green;
+  `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -157,9 +164,6 @@ library both use). Python driver fixes go to `library/`.
 ### 3b — Python driver defects (`library/skywriter/__init__.py`) — one per item
 
 - [x] P3.3 → done, moved to the Done section below.
-- [ ] P3.4 Deviation D3 — AirWheel wrap: signed 8-bit delta
-      (`d = ((cur - last + 128) % 256) - 128` steps, degrees = `d * 11.25`)
-      instead of `(cur - last)/32.0` with the `< 0.5` drop guard.
 - [ ] P3.5 Deviation D5 — dispatch `_on_garbage` for gesture code 1 (today
       the gesture branch ignores it).
 - [ ] P3.6 Deviation D6 — firmware version valid only when `FwValid == 0xAA`.
@@ -170,7 +174,14 @@ library both use). Python driver fixes go to `library/`.
 
 - [ ] P3.8 Deviation D2 — `setRuntimeParam` writes one byte past the 15-byte
       command arrays (loop bound 16 vs. array length 15).
-- [ ] P3.9 Deviation D3 — same signed 8-bit AirWheel wrap fix as P3.4.
+- [ ] P3.9 Deviation D3 — same signed 8-bit AirWheel wrap + silent
+      first-frame-baseline fix as P3.4 (the Python reference implementation
+      is in `library/skywriter/__init__.py`, commit `885475f`; the parity
+      test AC-MAP-09 requires the C++ decoder to emit the identical events —
+      when it lands: drop the `omit_pending` annotation on `airwheel_wrap`
+      in `specs/fixtures/manifest.json`, remove the D3 row from
+      `specs/README.md`, and reset `sky._lastrotation`/`rotation` state the
+      same way in `tests/adapters_cpp.py`'s C++ fresh-state shim).
 - [ ] P3.10 Deviation D4 — touch decode early-`return`s after the first (and
       only highest-bit) touch; must process every set bit and continue
       decoding AirWheel/xyz in the same frame.
@@ -199,20 +210,7 @@ library both use). Python driver fixes go to `library/`.
       (fixtures F07, F08, F09, F10, F18).
 - [ ] P3.14 Airwheel semantics per §5: 11.25°-quantized notches, sign,
       accumulator. Target `AC-MAP-04` wrap survivor (fixtures F11–F15).
-      **P3.14a must be settled first.**
-- [ ] P3.14a Airwheel baseline decision (discovered by P3.2 — the two
-      manifest expectations imply different decoder rules): `airwheel_wrap`
-      requires the scenario's **first** airwheel frame (F14, counter 0xFE)
-      to be a *silent baseline* (otherwise a nonsense −22.5° event would
-      fire), while `touch_with_position_and_airwheel` expects F18 (counter
-      0x08, also a scenario-fresh frame) to emit **+90°** as if the initial
-      counter were 0. Decide the rule (likely: first airwheel frame in a
-      fresh decoder is a silent baseline — that is what a hand re-entering
-      the field requires — and then re-author F18's expectation, e.g. by
-      prepending an airwheel-baseline frame F20 to its scenario or revising
-      its canonical/HID record), update `specs/fixtures/manifest.json` and,
-      if the change is contract-level, `specs/hid_mapping.md` §2 first.
-      Gate: blocks P3.14.
+      (Baseline rule settled by P3.14a — see the Done section.)
 - [ ] P3.15 Full §6 default mapping table as the single implementation table
       ("the table IS the implementation"), incl. garbage → nothing, reserved
       doubletap east/west → nothing, and media/consumer rows. Target
@@ -303,6 +301,35 @@ attribute table limit).
 
 ## Done
 
+- P3.4 — Deviation D3 closed for the **Python** driver (commit `885475f`):
+  `library/skywriter/__init__.py` now computes the AirWheel rotation delta
+  as a signed 8-bit difference,
+  `d = ((cur - last + 128) % 256) - 128` steps × 11.25°, so the counter
+  wrap 255→0 counts as +1 step (previously the unsigned `(cur - last)/32`
+  produced −255 steps across a wrap, which the old `|delta| < 0.5` guard
+  silently dropped — one full spin elegantly vanished). The decoder also
+  re-baselines silently: `_lastrotation` starts as `None` and is reset to
+  `None` on any frame without valid AirWheel data, so the first valid
+  frame after a gap only records the reference (a hand re-entering the
+  field cannot be read against a stale counter). Verified against the
+  self-arming corpus: `airwheel_wrap` (F14/F15) now hard-asserts +45° on
+  Python, `airwheel_quarter_turn_cw` and `touch_with_position_and_airwheel`
+  unchanged. `omit_pending` on `airwheel_wrap` narrowed to `["cpp"]`; the
+  D3 ledger row in `specs/README.md` narrowed to the Arduino driver
+  (P3.9 will close it the same way; its item text now spells out the
+  steps).
+- P3.14a — Airwheel baseline rule settled (commit `885475f`, together
+  with P3.4 it was entangled: the settled rule is what makes the P3.4
+  acceptance test green). Decision: **the first AirWheel-valid frame
+  after driver start, or after any stretch of AirWheel-invalid frames,
+  is a silent baseline** — the counter is free-running, so a fresh frame
+  cannot be read against a stale reference. Contract sentence added to
+  `specs/hid_mapping.md` §2 (build-mode correction; the two manifest
+  expectations that motivated this item now agree). Fixture corpus: new
+  frame `F20_airwheel_baseline00.hex` (counter 0x00, synthetic) is
+  prepended to the `touch_with_position_and_airwheel` scenario so F18's
+  +90° expectation survives the rule; manifest emission noted and its
+  scenario notes updated.
 - P3.3 — Deviation D1 closed (commit `c09981f`): `_do_poll()` in
   `library/skywriter/__init__.py` now strips the 4-byte frame header (size,
   flags, sequence, message ID) before dispatching, so
