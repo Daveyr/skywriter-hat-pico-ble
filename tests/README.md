@@ -43,11 +43,10 @@ temporarily*:
 Both are **self-arming**: `test_scenarios.py` lints every annotation against
 the specs/README.md ledger (a closed row forces dropping the annotation), and a
 realization check fails if a fix makes an annotated omission stop reproducing
-without the ledger being updated. The `specs/README.md` deviation rows —
-D8 (stale
-AGENTS.md gotcha) — is therefore guaranteed
-to flip its annotation to a hard assertion in the same change that closes it.
-(D9, the control-frame events `status_ack` / `fw_version_valid`, was closed
+without the ledger being updated. The specs/README.md deviation table is
+**empty since 2026-11-05 (P3.19)**: every annotation-carrying row made its
+scenario a hard assertion in the change that closed it. (D9, the control-frame
+events `status_ack` / `fw_version_valid`, was closed
 2026-11-05 the same way with fix item P3.11b: the Python and Arduino drivers
 both surface `system_status` / `firmware_info` canonical events now — the
 Arduino `poll()` also reads whole frames (132 bytes) so its 120-byte version

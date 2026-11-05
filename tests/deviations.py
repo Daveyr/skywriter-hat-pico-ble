@@ -16,7 +16,8 @@ Ledger row shape (pipe table)::
     | D3 | Arduino | AirWheel delta ignores the 8-bit counter wrap… | evidence |
 
 The second cell lists affected drivers (free text naming "Python" and/or
-"Arduino"; documentation-only deviations such as D8 name neither).
+"Arduino"; documentation-only deviations such as D8 — closed 2026-11-05,
+P3.19 — name neither).
 '''
 
 import functools

@@ -24,8 +24,12 @@ adapter) and checked against its machine-checkable expectations:
   a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
   closed 2026-11-05).
 
-Known-red decoder defects (D8 — specs/README.md) are annotated in the
-manifest, never swallowed silently by these tests. (D9, the control-frame
+Known-red decoder defects used to be annotated in the manifest so they could
+never be swallowed silently by these tests; every ledger row is closed now
+(specs/README.md's table has been empty since 2026-11-05 — D8, the stale
+AGENTS.md-gotcha row, was a documentation-only row with no fixture
+annotations and was closed 2026-11-05 with P3.19, the gotcha itself being
+accurate). (D9, the control-frame
 canonical events, was closed 2026-11-05 with fix item P3.11b: both drivers
 surface `system_status` / `firmware_info` records, so the `status_ack` /
 `fw_version_valid` expectations are hard assertions on both drivers.)

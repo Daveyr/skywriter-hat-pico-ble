@@ -9,14 +9,16 @@ These prove the mechanism the decoder/mapping work items will build on:
 - plumbing sanity pins (what already matches the spec today): position
   decode (F01), flick dispatch (F02), tap dispatch (F09) on both adapters.
 
-Spec-behaviour assertions for the known-red decoder deviation (D8) come
-with the fix items P3.12–P3.19 and the structured naming of P3.2 — this file
-deliberately asserts only what is true today. (D4, touch every-set-bit
-dispatch, was closed 2026-11-05 with P3.10; D7, the Arduino driver's gesture
-class/edge attributes, was closed 2026-11-05 with P3.11 — the C++ flick pin
-below now asserts the full record; D9, the control-frame canonical events,
-was closed 2026-11-05 with P3.11b — both drivers surface
-`system_status`/`firmware_info` records now.)
+Spec-behaviour fixtures come with the structured naming of P3.2; the
+annotation-driven self-arming ran against the known-open ledger rows. D8
+(a documentation-only AGENTS.md-gotcha row with no fixture annotations) was
+closed 2026-11-05 with P3.19 — the gotcha proved accurate and the ledger row
+was the stale side; the specs/README.md table has been empty since.
+(D4, touch every-set-bit dispatch, was closed 2026-11-05 with P3.10; D7, the
+Arduino driver's gesture class/edge attributes, was closed 2026-11-05 with
+P3.11 — the C++ flick pin below now asserts the full record; D9, the
+control-frame canonical events, was closed 2026-11-05 with P3.11b — both
+drivers surface `system_status`/`firmware_info` records now.)
 '''
 
 import time

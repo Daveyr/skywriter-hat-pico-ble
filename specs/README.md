@@ -83,6 +83,22 @@ These are implementation defects relative to the spec above. They are listed
 here so tests and the loop can be written against spec behaviour; each must be
 fixed in the drivers (Phase 2/3) and then removed from this table.
 
-| # | Driver | Deviation | Evidence |
-|---|---|---|---|
-| D8 | `AGENTS.md` | Gotcha "`begin()` does not send `SW_SET_RUNTIME`" is stale — `begin()` now sends the four runtime-parameter commands (mirroring Python `setup()`). The `poll()` `INPUT` vs `INPUT_PULLUP` note is still valid. | `skywriter.cpp` `begin()`. |
+The table is **empty as of 2026-11-05 (fix item P3.19)** — every row recorded
+here has been resolved and removed. `tests/deviations.py` treats every
+remaining row as live and open, so a void row would poison the single source
+of truth; a row is removed in the same change that closes it (the D2/D8
+convention). Closure history for the documentation-only rows:
+
+- **D8 (closed 2026-11-05, P3.19)** — the row claimed the `AGENTS.md` gotcha
+  "`begin()` does not send `SW_SET_RUNTIME`" was stale. Truth-check against
+  the current tree found the opposite: the gotcha is **accurate** —
+  `arduino/Skywriter/skywriter.cpp`'s `begin()` sends no Set_Runtime_Parameter
+  (0xA2, the sensor-configuration command) traffic at all (only GPIO setup and
+  the reset pulse; sensor bring-up belongs to the `SkywriterController`
+  firmware, P3.16), and `poll()` still resets the transfer pin (TS) to plain
+  `INPUT` at the end of each transfer. The stale side was the ledger row
+  itself, so the fix is this removal plus keeping the gotcha correct in
+  `AGENTS.md` (its Python line references were re-checked and refreshed).
+  Like D2, no fixture annotation referenced D8, so nothing needed re-arming
+  (the `tests/deviations.py` realization checks are vacuously green with an
+  empty table).
