@@ -103,6 +103,10 @@ docker run -it --rm \
   `circle(direction)` decorator; new fixture frames F21/F22 give the corpus
   its first AirWheel-disabled output mask (bit 3 off). 22 pytest tests;
   `run_tests.sh` 4/4.
+  Update (2026-11-05, P3.6 commit): deviation D6 is closed — firmware
+  version reports are valid only when `FwValid == 0xAA`; undefined status
+  values now raise instead of printing garbage as a version string. 29
+  pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -171,6 +175,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.3 → done, moved to the Done section below.
 - [x] P3.5 → done, moved to the Done section below.
 - [x] P3.5b → done, moved to the Done section below.
+- [x] P3.6 → done, moved to the Done section below.
 - [ ] P3.7 Deviation D7 — carry gesture attributes (class bits 12–15, edge
       flick bit 16, in-progress bit 31) into the decoded events.
 
@@ -305,6 +310,24 @@ attribute table limit).
 
 ## Done
 
+- P3.6 — Deviation D6 closed (commit `1164b91`): `_handle_firmware_info` in
+  `library/skywriter/__init__.py` now treats **only** `FwValid == 0xAA` as a
+  valid firmware-version report. Previously every status byte other than the
+  two known failure values (0x00 empty, 0x0A invalid image / failed update)
+  was silently accepted — a corrupted or unexpected value such as 0x55 would
+  have been read as working firmware and 120 arbitrary bytes printed as a
+  "version string". Fixed per Interface.pdf §4.3 Table 4-6 (the datasheet
+  defines exactly those three values): 0xAA accepted (the version string is
+  only read then), 0x00 / 0x0A keep their existing error messages, undefined
+  values raise "Unknown GestIC Library status (FwValid 0x..)". Verified by
+  new `tests/test_firmware_info.py` — 7 parametrized tests: the recorded
+  F17 fixture payload (0xAA) is accepted, both defined failures raise their
+  documented errors, and undefined values 0x01 / 0x55 / 0xAB / 0xFF raise.
+  Ledger: D6 row removed from `specs/README.md`; F17's manifest note and
+  `tests/README.md` updated. `bash run_tests.sh` green 4/4; 29 pytest tests
+  (22 + 7). No open deviations reference this handler; P3.11b still owns
+  surfacing the control frame as a canonical record (NUL-stripped version
+  string included).
 - P3.5b — Deviation D10 closed (commit `a716598`): the Python driver no
   longer silently discards circle gestures. `library/skywriter/__init__.py`
   now dispatches wire codes 6/7 from `_handle_sensor_data` to a handler
