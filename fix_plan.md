@@ -178,6 +178,16 @@ docker run -it --rm \
    reset; the three AirWheel scenarios are hard-asserted end-to-end
    (AC-MAP-04 + the touch+position+airwheel row of AC-MAP-06); see the
    P3.14 Done entry. 61 pytest tests; `run_tests.sh` 4/4.
+   Update (2026-11-05, P3.15 commit `5dab347`): the FULL §6 default
+   mapping profile is live in the mapping engine as the single
+   implementation table — flick/circle consumer rows, tap(north/south)
+   keyboard Page Up/Down, doubletap(north/south) media track-skip, the
+   reserved/garbage → nothing rows pinned silent, and the §6 hold
+   auto-scroll (touch(north/south) → wheel −1/+1 notch per 100 ms while
+   held, first notch at hold start); every fixture scenario is now
+   replay-asserted on the engine (MAPPING_ENGINE_PENDING empty), the five
+   gesture scenarios armed (AC-MAP-05 closed offline). 69 pytest tests;
+   `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -264,13 +274,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.12 → done, moved to the Done section below.
 - [x] P3.13 → done, moved to the Done section below.
 - [x] P3.14 → done, moved to the Done section below.
-- [ ] P3.15 Full §6 default mapping table as the single implementation table
-      ("the table IS the implementation"), incl. garbage → nothing, reserved
-      doubletap east/west → nothing, and media/consumer rows. Target
-      `AC-MAP-05`, `AC-MAP-06`. Also owns the §6 hold auto-scroll rows
-      (`touch(north)` / `touch(south)` → wheel −1/+1 notch per 100 ms while
-      held) — allocated here by P3.13 (they need the P3.14 wheel semantics
-      and are §6 table rows, not button-state rows).
+- [x] P3.15 → done, moved to the Done section below.
 - [ ] P3.15b Fixture-corpus gap fill (discovered by P3.2): the corpus has no
       scenario that exercises actual pointer movement (F01, then a second
       valid *moderately different* position → a real mouse delta), nor any
@@ -391,6 +395,67 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.15 — the FULL §6 default mapping profile is live in the mapping engine
+  as the single implementation table (commit `5dab347`). Everything
+  `specs/hid_mapping.md` §6 documents now happens in
+  `pico-arduino/SkywriterHID/src/SkywriterHIDMapper.{h,cpp}`, one
+  row-cited lookup helper per event kind (each row quotes its spec line):
+  - **Gesture → consumer rows** (`onGesture`, AC-MAP-05): code 2 → Scan
+    Next Track 0x00B5, 3 → Scan Previous Track 0x00B6, 4 → Volume
+    Increment 0x00E9, 5 → Volume Decrement 0x00EA, 6/7 → Volume Inc/Dec
+    (the circle rows — mapped unconditionally because §6 explicitly makes
+    their dormancy a *sensor constraint*, not an implementation choice),
+    code 1 → the garbage → *nothing* row, unknown codes → nothing. One
+    consumer-report press per gesture event ("repeats per event"), emitted
+    immediately and un-coalesced like wheel deltas. The consumer USage
+    codes became named constants next to the existing Page Up/Down ones.
+  - **Keyboard rows**: tap(north) → Page Up usage 78, tap(south) → Page
+    Down usage 79 via the new `keyboardPress` sink path (the sink already
+    had `keyboardPress`/`consumerPress` from P3.2's harness — the engine
+    now drives them).
+  - **Media tap rows**: doubletap(north) → Next Track, doubletap(south) →
+    Previous Track; doubletap(east/west) stay the reserved → *nothing*
+    rows, now pinned silent by a dedicated unit test (their old
+    "whatever P3.15 decides" docstring is gone).
+  - **Hold auto-scroll rows**: touch(north) hold → wheel −1 notch,
+    touch(south) hold → wheel +1 notch, one per the new
+    `AUTO_SCROLL_INTERVAL_MS = 100` constant (§6's own row timing — not a
+    §7 tunable, the §7 list is fixed by the spec). Engine decisions
+    recorded here: (a) the FIRST notch emits immediately at hold start
+    ("while held" reads as the hold itself producing scrolls —
+    responsive; a future north/south hold fixture must expect it; noted in
+    `specs/fixtures/manifest.json`'s dated revision notes); (b) the row's
+    wheel values are §6's own literals — north auto-scroll emits NEGATIVE
+    notches, deliberately distinct from §5's clockwise-positive
+    convention, copied verbatim; (c) the interval is paced in `tick()`
+    after the release loop, so a hold silence-released on this very tick
+    never scrolls again, and §4's lift-off trigger ends scrolling the
+    same way it releases held buttons (release_all_buttons now speaks the
+    hold-row view, not its previous assume-a-button view).
+  - **Table consolidation (§7 "the table IS the implementation")**: the
+    per-kind row helpers (`hold_action_for`, `tap_click_button_for`,
+    `tap_key_usage_for`, `doubletap_click_button_for`,
+    `doubletap_consumer_usage_for`, `gesture_consumer_usage_for`) carry
+    every §6 cell, each next to a comment quoting the row — the old
+    button-only `button_for` is gone; held_ now records engaged hold rows
+    generally (button OR auto-scroll) instead of assuming a button.
+  - Arm flip: the five gesture scenarios (`flick_west_east`,
+    `flick_east_west`, `edge_flick_east_west`, `circle_clockwise`,
+    `circle_counter_clockwise`) are hard-asserted end-to-end through the
+    real driver → engine chain; `MAPPING_ENGINE_PENDING` is empty since
+    every corpus scenario is now armed (the garbage/always-silent
+    scenarios stay armed as silence pins); a dated revision note was
+    added to the manifest; docstrings/README/spec §7 updated to say the
+    §6 table is complete.
+  - New pins: 8 direct mapper unit tests in `tests/test_mapper_unit.py`
+    (north/south keyboard taps, north/south media doubletaps, reserved
+    east/west silence, north/south auto-scroll cadence + sign, stop at
+    release-by-silence, stop at lift-off with the same-tick
+    release-wins contrast, and rowless zones never scroll). Plus an
+    `arduino-cli` RP2040 Pico W smoke sketch including the mapper compiles
+    clean (throwaway, deleted).
+  Verified: `bash run_tests.sh` green 4/4; 69 pytest tests (61 + 8).
 
 - P3.14 — the §5 AirWheel semantics are live in the mapping engine (commit
   `95ad4c2`). The rotation (scroll) stream of `specs/hid_mapping.md` §5
