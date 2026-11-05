@@ -100,9 +100,10 @@ Let `pos` be the canonical 0–65535 position, x/y.
    coalesced frames — never dropped. The engine's cadence constant is
    `REPORT_INTERVAL_MS` (initial: 15 ms — the slowest common BLE HID
    connection interval, so the pointer rate never falls below the ≥ 60 Hz
-   floor of AC-BLE-04; the firmware may tighten it towards the live
-   connection interval, fix item P3.18, and the hardware loop tunes final
-   values per P4.5).
+   floor of AC-BLE-04) and is also a runtime property: the firmware
+   re-targets it at the LIVE connection interval its host negotiated
+   (HCI-tracked since P3.18, see `ble_hid.md` §7), and the hardware loop
+   tunes final values per P4.5.
 
 ## 4. Touch semantics (buttons)
 

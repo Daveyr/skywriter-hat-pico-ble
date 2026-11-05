@@ -128,6 +128,16 @@ Device identity:
 | Gesture → report latency | < 100 ms end-to-end | `AC-BLE-04` (host-side timestamped probe) |
 | Pointer report rate | ≥ 60 Hz sustained, target 200 Hz (sensor update rate is 200 Hz / 5 ms — Interface.pdf §3.6.4) | `AC-BLE-04` |
 | Report coalescing | Move reports may be coalesced to the connection interval; button/press transitions must never be coalesced away | `AC-BLE-04` |
+
+Implementation note (P3.18, 2026-11-05): the firmware requests the
+[7.5, 15] ms interval window on connection (`gap_request_connection_
+parameter_update`) and tracks every negotiated / re-negotiated interval
+through its BTstack HCI event handler, reprogramming the engine's
+move-report cadence to match — so "coalesced to the connection interval"
+is the live value, not a fixed guess. Wheel/keyboard/media transitions are
+emitted immediately, never coalesced. The RF truth of this row is still
+the `AC-BLE-04` hardware probe; open question 3 below (send-blocking
+behaviour) remains for that probe.
 | Reconnect time | < 5 s advertising + host reconnect | `AC-BLE-05` |
 
 ## 8. Battery reporting

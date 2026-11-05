@@ -300,6 +300,21 @@ void SkywriterHIDMapper::onAirwheel(float degrees, unsigned long /*now_ms*/) {
   sink_.mouseWheel(static_cast<int8_t>(notches));
 }
 
+void SkywriterHIDMapper::set_report_interval_ms(unsigned long interval_ms) {
+  // P3.18 — see specs/ble_hid.md §7 + hid_mapping.md §3 rule 6. Re-targets
+  // the move-report cadence at the live connection interval; values below
+  // 1 ms are clamped to 1 ms (a sub-millisecond pace cannot be expressed in
+  // the millis()-driven cadence, and no such interval exists on a real
+  // radio — LE connection intervals are ≥ 7.5 ms in 1.25 ms units). This
+  // changes only WHEN accumulated movement is emitted; pending_dx_/dy_
+  // survive untouched, so no movement is ever lost or duplicated by a pace
+  // change.
+  if (interval_ms < 1) {
+    interval_ms = 1;
+  }
+  report_interval_ms_ = interval_ms;
+}
+
 void SkywriterHIDMapper::tick(unsigned long now_ms) {
   // §3 rule 5: lift-off gating. PositionValid is implicit in the event
   // stream (the driver only reports valid positions), so "invalid for more
@@ -405,8 +420,8 @@ void SkywriterHIDMapper::finish(unsigned long now_ms) {
 }
 
 void SkywriterHIDMapper::attempt_report(unsigned long now_ms, bool force) {
-  if (!force && now_ms - last_report_ms_ < REPORT_INTERVAL_MS) {
-    return;  // §3 rule 6: at most one move report per connection interval
+  if (!force && now_ms - last_report_ms_ < report_interval_ms_) {
+    return;  // §3 rule 6: at most one move report per (live) connection interval
   }
   long dx = round_half_away(pending_dx_);
   long dy = round_half_away(pending_dy_);

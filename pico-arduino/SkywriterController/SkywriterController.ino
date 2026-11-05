@@ -33,8 +33,15 @@
     events are dropped while no host is connected, every held button/scroll
     state is released on link loss (via the mapper's `disconnect()`), and
     one neutral report resyncs the host on (re)connect.
-  - AC-BLE-04 (button half) — press/release transitions go out as soon as
-    they happen through the pulse queue; move-report pacing is P3.18.
+  - AC-BLE-04 — the performance rules of §7 (P3.18): press/release
+    transitions go out as soon as they happen through the pulse queue
+    (never coalesced away), and move reports are paced at the LIVE BLE
+    connection interval: the HCI connection watcher below reads the
+    interval the host actually negotiated, asks the host to keep it inside
+    the 7.5–15 ms window the ≥ 60 Hz pointer-rate floor needs, and
+    reprograms the mapping engine's report cadence (move reports only;
+    wheel/keyboard/media events are emitted immediately —
+    latency-sensitive).
 
   Connection life cycle (specs/ble_hid.md §6, P3.17): the Bluetooth stack's
   callbacks do nothing but record the state change and restart advertising
@@ -534,6 +541,97 @@ static void on_ble_closed(uint8_t type, uint16_t channel, uint8_t* packet,
 }
 
 // ---------------------------------------------------------------------------
+// §7 performance / AC-BLE-04 (P3.18): move reports paced at the LIVE
+// connection interval
+//
+// Report coalescing (specs/ble_hid.md §7): move reports may be coalesced to
+// the connection interval — that is exactly the mapping engine's cadence
+// gate (hid_mapping.md §3 rule 6) — so the engine's pace must be the
+// interval the host actually negotiated, not a fixed guess. The pointer
+// rate must stay ≥ 60 reports/s (interval ≤ ~16.7 ms), and its 200 Hz
+// sensor input (one frame every 5 ms) is fully accumulated in the engine
+// meanwhile, so re-pacing never drops movement.
+//
+// How the live interval is learned: the sketch adds its own small BTstack
+// HCI event handler alongside the wrapper's — BTstack supports any number of
+// event handlers. The two LE (Low Energy) subevents carrying the connection
+// parameters are decoded; everything else is filtered away in one branch.
+//   * HCI_SUBEVENT_LE_CONNECTION_COMPLETE — a host connected; the event
+//     names the connection interval it chose (unit: 1.25 ms).
+//   * HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE — the host changed the
+//     parameters later (hosts do this during pairing/bonding).
+// Handlers stay flag-only (same context rule as on_ble_opened above): the
+// negotiated interval is stored and loop() reprograms the engine.
+//
+// Additionally, on connection the sketch ASKS the host to keep the
+// interval inside [7.5, 15] ms (units: 6..12 × 1.25 ms) — the window that
+// keeps the ≥ 60 Hz pointer-rate floor of AC-BLE-04 possible even if the
+// host's policy would have chosen something slower (a request the host may
+// decline; the stack sends it as a standard connection-parameter update,
+// no HID send involved, safe from the radio context like
+// gap_advertisements_enable above).
+// ---------------------------------------------------------------------------
+
+// [7.5, 15] ms, in 1.25 ms units — AC-BLE-04's ≥ 60 Hz floor; a request
+// towards the faster end also serves §7's 200 Hz target where the host
+// allows it.
+static const uint16_t PACE_MIN_INTERVAL_UNITS = 6;   // 7.5 ms
+static const uint16_t PACE_MAX_INTERVAL_UNITS = 12;  // 15 ms
+// Supervision timeout for the request (unit: 10 ms): 480 ms, comfortably
+// above the LE requirement of 2 × (1 + latency) × max interval = 30 ms.
+static const uint16_t PACE_SUPERVISION_TIMEOUT_UNITS = 48;
+
+// The registration struct must live forever (BTstack links handlers into
+// its own list) — static at sketch scope.
+static btstack_packet_callback_registration_t hci_event_registration;
+
+// Set from the stack context when a negotiated interval is pending; the
+// interval itself is a uint16 read that stays whole across the contexts
+// (single byte-multiples — no torn-read hazard).
+static volatile bool ble_pace_dirty = false;
+static volatile uint16_t ble_pace_units = 0;
+
+static void on_hci_event(uint8_t packet_type, uint16_t channel,
+                         uint8_t* packet, uint16_t size) {
+  if (packet_type != HCI_EVENT_PACKET || packet == nullptr) return;
+  if (hci_event_packet_get_type(packet) != HCI_EVENT_LE_META) return;
+  switch (hci_event_le_meta_get_subevent_code(packet)) {
+    case HCI_SUBEVENT_LE_CONNECTION_COMPLETE: {
+      if (hci_subevent_le_connection_complete_get_status(packet) !=
+          ERROR_CODE_SUCCESS) {
+        return;  // a failed connection attempt carries no interval to use
+      }
+      uint16_t interval =
+          hci_subevent_le_connection_complete_get_conn_interval(packet);
+      if (interval == 0) return;
+      ble_pace_units = interval;
+      ble_pace_dirty = true;
+      // §7/AC-BLE-04: ask for the fast window (may be declined; see the
+      // section comment). No HID send API involved — stack request only.
+      gap_request_connection_parameter_update(
+          hci_subevent_le_connection_complete_get_connection_handle(packet),
+          PACE_MIN_INTERVAL_UNITS, PACE_MAX_INTERVAL_UNITS, 0,
+          PACE_SUPERVISION_TIMEOUT_UNITS);
+      return;
+    }
+    case HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE: {
+      if (hci_subevent_le_connection_update_complete_get_status(packet) !=
+          ERROR_CODE_SUCCESS) {
+        return;  // the host declined the parameters — the old pace stands
+      }
+      uint16_t interval =
+          hci_subevent_le_connection_update_complete_get_conn_interval(packet);
+      if (interval == 0) return;
+      ble_pace_units = interval;
+      ble_pace_dirty = true;
+      return;
+    }
+    default:
+      return;  // every other LE subevent is irrelevant to report pacing
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Bring-up and the main loop
 // ---------------------------------------------------------------------------
 
@@ -560,6 +658,14 @@ void setup() {
   //    (Each handler only sets a flag; loop() does the HID-visible work.)
   PicoBluetoothBLEHID.setOpenedCB(on_ble_opened);
   PicoBluetoothBLEHID.setClosedCB(on_ble_closed);
+
+  //    The §7 (AC-BLE-04 / P3.18) HCI event handler joins them: it watches
+  //    the LE connection parameters (the interval move reports are paced
+  //    at). Registered before the radio starts, exactly like the two
+  //    callbacks above — BTstack stores the static registration struct and
+  //    this sketch runs only one begin().
+  hci_event_registration.callback = &on_hci_event;
+  hci_add_event_handler(&hci_event_registration);
 
   // 4. Exactly ONE begin() — KeyboardBLE's — so `startHID` runs exactly
   //    once (AC-BLE-02). Because both MouseBLE and KeyboardBLE libraries
@@ -592,6 +698,22 @@ void loop() {
   // sensor events of this iteration reach the engine, so the mapper is
   // always in a clean "fresh session" state when its inputs arrive.
 
+  // §7 / AC-BLE-04 (P3.18): apply a negotiated connection interval to the
+  // engine's move-report cadence — first drain of the loop, so the pace is
+  // current before any of this iteration's sensor events. Units are
+  // 1.25 ms; convert rounded to nearest whole ms (a pace of 0 could only
+  // mean a bogus event: clamp to 1 ms defensively). Handler-context rule:
+  // the pace change happens HERE (loop context), not in on_hci_event.
+  if (ble_pace_dirty) {
+    ble_pace_dirty = false;
+    unsigned long pace_ms =
+        (static_cast<unsigned long>(ble_pace_units) * 5u + 2u) / 4u;
+    if (pace_ms == 0) pace_ms = 1;
+    mapper.set_report_interval_ms(pace_ms);
+    Serial.print("SKYSTATE pace report_interval_ms=");
+    Serial.println(pace_ms);
+  }
+
   if (ble_disconnect_event) {
     ble_disconnect_event = false;
     // 1. The mapping engine forgets the whole session: held buttons/scroll
@@ -605,7 +727,11 @@ void loop() {
     //    resync report below really is neutral — MOUSE_ALL releases every
     //    mouse button bit, KeyboardBLE.releaseAll() clears the latched
     //    keyboard report (both no-op when nothing was held).
+    // 3. The report pace returns to the spec's default constant (§3 rule
+    //    6, REPORT_INTERVAL_MS): each new host negotiates its own interval,
+    //    re-captured by the HCI watcher on the next connection.
     pulses_clear();
+    mapper.set_report_interval_ms(SkywriterHIDMapper::REPORT_INTERVAL_MS);
     MouseBLE.release(MOUSE_ALL);
     KeyboardBLE.releaseAll();
     Serial.println("SKYSTATE ble_dropped");

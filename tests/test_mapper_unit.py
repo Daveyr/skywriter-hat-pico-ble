@@ -1,6 +1,7 @@
 '''Direct SkywriterHIDMapper unit tests for the §4 touch semantics
-(fix_plan item P3.13), the §5 AirWheel semantics (fix_plan item P3.14) and
-the §6 keyboard/media/hold-auto-scroll rows (fix_plan item P3.15).
+(fix_plan item P3.13), the §5 AirWheel semantics (fix_plan item P3.14), the
+§6 keyboard/media/hold-auto-scroll rows (fix_plan item P3.15) and the P3.18
+live connection-interval report pacing.
 
 Some timing behaviours cannot live in the fixture corpus: the Python driver
 rate-limits repeat touch callbacks by design (default 4 Hz = one dispatch
@@ -584,3 +585,80 @@ def test_lift_off_resets_the_wheel_accumulator():
         ('TICK', 400),
     ])
     assert without_lift_off == [_wheel(1)], without_lift_off
+
+
+# ------------------------------------------- P3.18: live connection pace ---
+# (specs/ble_hid.md §7 "Report coalescing" / hid_mapping.md §3 rule 6: move
+# reports may be coalesced to the connection interval — the firmware
+# re-targets the engine's cadence at the *negotiated* interval, P3.18.)
+#
+# Timeline arithmetic (GAIN = 1/256, so +256 raw = +1.0 cursor unit per
+# frame): positions every 5 ms, right after a fresh baseline. The engine
+# initialises last_report_ms_ = 0, so the first attempt that is
+# `>= pace` past t=0 drains; afterwards the clock is the last report's.
+# Every test also recomputes the §3 rule 6 conservation property: the sum
+# of reported deltas equals exactly the number of position frames times
+# 1 unit — coalescing re-times, never drops.
+
+_PACE_FRAMES = [
+    # baseline (silent, sets prev), then +1 cursor unit every 5 ms
+    ('POSITION 100 100', 0),
+    ('POSITION 356 100', 5),
+    ('POSITION 612 100', 10),
+    ('POSITION 868 100', 15),
+    ('POSITION 1124 100', 20),
+]
+
+
+def test_pace_faster_than_default_emits_sooner_movement_conserved():
+    '''A tight live interval (e.g. the LE minimum 7.5 ms → 8 ms pace) lets
+    the already-accumulated movement out at every interval boundary instead
+    of the 15 ms default — total movement is exactly conserved.'''
+    script = [('PACE 8', 1)] + _PACE_FRAMES + [('TICK', 22)]
+    records = [r for r in _run(script) if r.startswith('HID ')]
+    # t=5:  5 − 0 < 8  → pending 1
+    # t=10: 10 − 0 >= 8 → MOVE 2; last = 10
+    # t=15: 15 − 10 = 5 < 8 → pending 1
+    # t=20: 20 − 10 = 10 >= 8 → MOVE 2 (pending 1 + 1)
+    assert records == ['HID MOVE 2 0', 'HID MOVE 2 0'], records
+    assert sum(int(r.split()[2]) for r in records) == 4, records  # 4 frames
+
+
+def test_pace_slower_than_default_coalesces_more_movement_conserved():
+    '''A slow live interval (e.g. a 30 ms host policy) further coalesces the
+    movement into one report — again without dropping anything (the
+    deltas accumulate across the longer silence, §3 rule 6).'''
+    script = [('PACE 30', 1)] + _PACE_FRAMES + [('TICK', 31)]
+    records = [r for r in _run(script) if r.startswith('HID ')]
+    # nothing fires inside the 21 ms of frames (all < 30 past t=0); the
+    # t=31 tick drains all four accumulated units at once.
+    assert records == ['HID MOVE 4 0'], records
+
+
+def test_pace_change_never_loses_pending_movement():
+    '''Changing the pace with movement pending leaves the accumulator
+    untouched: the movement goes out on the next admissible attempt, same
+    total as with a single pace all along.'''
+    script = [
+        ('POSITION 100 100', 0),
+        ('POSITION 356 100', 5),   # pending 1 (5 < 15, still on the default)
+        # mid-stream pace change — tightens like a host re-negotiating the
+        # connection interval during a gesture
+        ('PACE 8', 6),
+        ('POSITION 612 100', 11),  # 11 − 0 >= 8 → MOVE 2
+        ('POSITION 868 100', 16),  # 16 − 11 = 5 < 8 → pending 1
+        ('TICK', 19),              # 19 − 11 = 8 → MOVE 1
+    ]
+    records = [r for r in _run(script) if r.startswith('HID ')]
+    assert records == [('HID MOVE 2 0'), ('HID MOVE 1 0')], records
+
+
+def test_sub_millisecond_pace_is_clamped_to_one_ms():
+    '''set_report_interval_ms clamps values below 1 ms to 1 ms (the
+    engine's cadence is whole milliseconds; no real LE interval is
+    sub-millisecond). The applied value is returned as the PACE record.'''
+    records = _run([('PACE 0', 0)])
+    assert records == ['PACE 1'], records
+
+    records = _run([('PACE 7', 0)])
+    assert records == ['PACE 7'], records

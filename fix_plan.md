@@ -226,6 +226,19 @@ docker run -it --rm \
    `specs/ble_hid.md` §5/§10 and the source-level pin were corrected, and
    P4.3's AC-BLE-06 check now verifies the expectation "reconnect WITHOUT
    re-pairing" on hardware.
+   Update (2026-11-05, P3.18 commit `e3ac9ae`): move-report pacing is
+    live: the engine's cadence is a runtime value re-targeted at the
+    host's negotiated BLE connection interval (an HCI-tracked LE
+    connection watcher; a [7.5, 15] ms connection-parameter request keeps
+    the ≥ 60 Hz floor of AC-BLE-04 reachable; the disconnect drain resets
+    it to the spec constant), and 4 new `PACE`-instruction mapper unit
+    tests + 4 new source-level sketch pins assert the pacing and the
+    never-lost delta accumulation. 103 pytest tests; `run_tests.sh` 4/4.
+    The Phase-4 gates this item leaves open: AC-BLE-04's radio truth
+    (≥ 60 Hz / < 100 ms end-to-end, P4.3) and open question 3 of
+    `ble_hid.md` §10 (send-blocking behaviour on slow connection
+    intervals — the measured pace and the host's parameter decision are
+    what that probe must answer).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -324,10 +337,7 @@ in Phase 4 on hardware
       needed and no deviation exists — the core's bond store IS
       flash-backed; the P3.17 RAM-only assumption came from the wrong
       config file).
-- [ ] P3.18 Firmware sketch: performance provisions per `specs/ble_hid.md`
-      §7 — report pacing to the connection interval with delta accumulation,
-      button/press transitions never coalesced away. Target `AC-BLE-04`
-      (verified in Phase 4).
+- [x] P3.18 → done, moved to the Done section below.
 - [ ] P3.19 Truth-check the AGENTS.md gotchas (deviation D8): verify the
       "`begin()` does not send `SW_SET_RUNTIME`" claim against current code
       and fix the doc if stale; re-check `poll()` `INPUT` vs
@@ -411,6 +421,79 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.18 — the §7 performance provisions are live in the firmware (commit
+  `e3ac9ae`): move reports are paced at the LIVE BLE connection interval,
+  with delta accumulation and never-coalesced button transitions, the
+  software half of AC-BLE-04 (`specs/ble_hid.md` §7; the radio truth —
+  ≥ 60 reports/s sustained and < 100 ms end-to-end on a real phone/PC —
+  stays with the Phase-4 probe P4.3). In plain language: the Pico W now
+  finds out how often its paired computer actually listens (hosts agree on
+  a listening rhythm — the connection interval — when they connect), asks
+  the computer to keep that rhythm fast enough for smooth cursor movement
+  (7.5–15 ms), and re-times exactly the cursor-update stream to that
+  rhythm. The sensor readings arriving faster than the radio can send
+  (200 per second from the sensor) are summed up continuously, so
+  re-timing the send moments never loses or distorts movement; clicks,
+  scroll, keyboard and media actions are unaffected — they are delivered
+  immediately, never merged.
+  - `SkywriterHIDMapper.{h,cpp}`: the report cadence (`REPORT_INTERVAL_MS`,
+    hid_mapping.md §3 rule 6) is now a runtime value
+    `report_interval_ms_` created from the named constant (the constant
+    stays the initial value AND the fallback — no second copy of the
+    mapping), with public `set_report_interval_ms()` (values < 1 ms
+    clamped to 1 ms; pending deltas survive any pace change untouched —
+    a pace change re-times emission, never drops) and a
+    `report_interval_ms()` getter; `attempt_report()` gates on the live
+    value. The wheel/keyboard/consumer paths deliberately never route
+    through this cadence (§5's "emitted immediately" rule; the pulse
+    queue likewise) — button/press transitions cannot be coalesced away.
+  - `SkywriterController.ino`: a sketch-owned BTstack (the board's
+    Bluetooth software) HCI event handler — registered BEFORE the radio
+    starts, alongside the wrapper's opened/closed callbacks — decodes
+    `HCI_SUBEVENT_LE_CONNECTION_COMPLETE` (the interval a host chooses at
+    connect, unit 1.25 ms; failed/completed-with-status-0 events guarded)
+    and later re-negotiations (`HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE`),
+    store-and-flag only (the established radio-context rule: no HID calls
+    from the stack's context). loop() applies the interval (unit × 1.25 ms
+    rounded to nearest, < 1 ms clamped) into
+    `mapper.set_report_interval_ms()` and prints
+    `SKYSTATE pace report_interval_ms=N` — the evidence line the P4.3
+    probe reads. On connection the sketch also calls
+    `gap_request_connection_parameter_update()` asking for [7.5, 15] ms
+    (units 6..12 of 1.25 ms; supervision timeout 480 ms ≥ the LE rule of
+    2 × (1 + latency) × max interval): a standard parameter request the
+    host may decline, aimed at AC-BLE-04's ≥ 60 Hz floor (a slower host
+    policy would otherwise make the floor unreachable — there is no faster
+    sending than the interval allows). The disconnect drain resets the
+    pace to the spec's REPORT_INTERVAL_MS so each new host is re-captured
+    cleanly. New build-free truth used: `hci_add_event_handler()` accepts
+    additional sketch handlers safely before the stack is powered (the
+    registration struct is static) — `PicoBluetoothBLEHID` keeps its own
+    handler; the wrapper's opened callback does not expose the interval.
+  - Tests: host binary gained the `PACE <ms>` instruction (asserts the
+    clamped applied value as a `PACE <ms>` record) and 4 new mapper unit
+    tests (faster-than-default pace emits sooner with movement exactly
+    conserved; slower pace coalesces into one report, conserved again;
+    a mid-stream pace change like a host re-negotiating mid-gesture loses
+    no pending movement; the < 1 ms clamp) — recomputing AC-MAP-01's
+    "coalesce, never drop" conservation (Σ reported deltas == Σ frames) at
+    each pace. `tests/test_firmware_sketch.py` gained 4 source pins
+    (live-interval wiring incl. decode getters + registration-before-radio
+    + no mapper touch in the handler; the 6..12-unit parameter request;
+    the `SKYSTATE pace` line; the disconnect reset).
+  - Spec/doc truth updated: `ble_hid.md` §7 gained the implementation note
+    (live interval, immediate non-move emissions, open question 3 still the
+    probe's), `hid_mapping.md` §3 rule 6 records the runtime property, the
+    header/namespace comments in both sources cite P3.18, and
+    `tests/README.md`'s parts table tracks the new instructions/pins.
+  - Honest scope note: the HCI watcher is verified at the source-compile
+    and logic level here; whether a real host keeps the interval inside
+    the requested window (and whether send() ever busy-waits badly —
+    §10 open question 3) is exactly what P4.3's timestamped probe measures.
+  Verified: `bash run_tests.sh` green 4/4; 103 pytest tests (95 + 8);
+  `pico-arduino/SkywriterController` compiles for the Pico W (22 % flash /
+  34 % RAM — unchanged, the handler is small).
 
 - P3.17b — the pairing-bond persistence question is resolved (commit
   `<HASH>`), and the resolution **refutes** P3.17's RAM-only assumption — a

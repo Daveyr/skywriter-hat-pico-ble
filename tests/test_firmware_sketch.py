@@ -22,6 +22,12 @@ via the direct battery API, the neutral resync report on (re)connect,
 sensor events dropped while unconnected, held state released on link loss,
 advertising restarted on link loss, and the callback-context deadlock rule.
 
+The P3.18 pins carry the §7 performance rules (AC-BLE-04 software side):
+move reports paced at the host-negotiated BLE connection interval via the
+sketch's BTstack HCI event handler, the [7.5, 15] ms connection-parameter
+request that keeps the ≥ 60 Hz pointer-rate floor reachable, and the
+serial evidence line the hardware probe reads.
+
 Radio/GATT/RF truth is the Phase-4 hardware probes; these source-level pins
 only make a software regression (e.g. a reintroduced second `begin()`) fail
 `bash run_tests.sh` immediately.
@@ -356,3 +362,80 @@ def test_sensor_callbacks_registered_before_the_radio_starts():
     assert setup_src.index("PicoBluetoothBLEHID.setOpenedCB") < \
         setup_src.index("KeyboardBLE.begin("), (
         "link callbacks must be registered before the radio starts")
+
+
+# ------------------------------------- P3.18: §7 performance (AC-BLE-04) ---
+# (Move-report pacing at the LIVE BLE connection interval, with the host's
+# negotiated parameters tracked by the sketch's own BTstack HCI event
+# handler. The RF truth — does the pointer really sustain ≥ 60 Hz on a
+# phone/laptop — is the Phase-4 probe P4.3; these pins fail fast on
+# software regressions.)
+
+def test_report_pacing_is_wired_to_the_live_connection_interval():
+    """§7 'Report coalescing': the sketch learns the negotiated connection
+    interval from the stack (an HCI event handler decoding both the LE
+    connection-complete and connection-update subevents) and re-programs
+    the engine's move-report cadence in the loop context — never from the
+    radio callback (the flag-only context rule)."""
+    body = function_body("on_hci_event")
+    assert "HCI_EVENT_LE_META" in body
+    assert "hci_event_le_meta_get_subevent_code(" in body
+    assert "HCI_SUBEVENT_LE_CONNECTION_COMPLETE" in body, (
+        "the interval a host chooses at connection time must be captured")
+    assert "HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE" in body, (
+        "later host re-negotiations must re-capture the interval too")
+    for getter in ("hci_subevent_le_connection_complete_get_conn_interval",
+                   "hci_subevent_le_connection_update_complete_get_conn_interval"):
+        assert getter in body, f"{getter} must decode the negotiated interval"
+    # flag-only in the stack context: the engine is reprogrammed in loop()
+    assert "mapper." not in body, (
+        "on_hci_event must not touch the mapper (radio context)")
+    assert "ble_pace_dirty = true" in body
+    loop_body = function_body("loop")
+    assert "mapper.set_report_interval_ms(" in loop_body, (
+        "loop() must apply the negotiated interval to the engine's cadence")
+    # the handler is registered before the radio starts (same ordering rule
+    # as the opened/closed callbacks — a host connecting during bring-up
+    # must not fire into an unregistered handler)
+    setup_src = function_body("setup")
+    assert setup_src.index("hci_add_event_handler(") < \
+        setup_src.index("KeyboardBLE.begin("), (
+        "the HCI event handler must be registered before the radio starts")
+
+
+def test_pace_request_targets_the_60hz_floor():
+    """§7 row 'Pointer report rate ≥ 60 Hz': on connection the sketch asks
+    the host to keep the interval inside [7.5, 15] ms (units of 1.25 ms:
+    6..12) — the window that makes the floor reachable. Guards against a
+    degraded-default host policy going unnoticed until the hardware
+    probe."""
+    src = sketch_source()
+    assert "PACE_MIN_INTERVAL_UNITS = 6" in src, (
+        "7.5 ms minimum interval (= 60 Hz at most ±1 report) must be the "
+        "low end of the connection-parameter request")
+    assert "PACE_MAX_INTERVAL_UNITS = 12" in src, (
+        "15 ms — the engine's default REPORT_INTERVAL_MS — must be the "
+        "high end of the request")
+    body = function_body("on_hci_event")
+    assert "gap_request_connection_parameter_update(" in body
+    # it is a plain stack request, not the HID send API (callback context)
+    assert "PicoBluetoothBLEHID.send" not in body
+
+
+def test_pace_evidence_line_for_the_hardware_probe():
+    """AC-BLE-04's probe reads the applied pace from the serial console:
+    the SKYSTATE pace line names the engine's current move-report
+    interval."""
+    assert "SKYSTATE pace report_interval_ms=" in sketch_source()
+
+
+def test_pace_resets_on_link_loss():
+    """The disconnect drain returns the report cadence to the spec's named
+    default (§3 rule 6) — each new host re-negotiates its own interval via
+    the HCI watcher."""
+    loop_body = function_body("loop")
+    disconnect_at = loop_body.index("mapper.disconnect(now)")
+    reset_at = loop_body.index(
+        "mapper.set_report_interval_ms(SkywriterHIDMapper::REPORT_INTERVAL_MS)")
+    assert reset_at > disconnect_at, (
+        "the pace reset belongs to the link-loss drain")

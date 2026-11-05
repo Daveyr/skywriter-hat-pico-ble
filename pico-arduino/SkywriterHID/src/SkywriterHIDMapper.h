@@ -123,9 +123,12 @@ class SkywriterHIDMapper {
   // Report cadence: at most one mouse-move report per connection interval
   // (§3 rule 6). Initial 15 ms — the slowest common BLE HID connection
   // interval, so the pointer rate never drops under the 60 Hz floor of
-  // AC-BLE-04 even on the slowest host; the firmware (P3.18) may tighten it
-  // towards the live connection interval. Deltas accumulate while held, so
-  // coalescing never drops movement.
+  // AC-BLE-04 even on the slowest host. The pace is also a runtime property
+  // (set_report_interval_ms below): the firmware (P3.18) re-targets it at
+  // the LIVE connection interval its host negotiated — the named constant
+  // stays the initial value and the fallback, never a second copy of the
+  // mapping. Deltas accumulate while held, so coalescing never drops
+  // movement.
   static const unsigned long REPORT_INTERVAL_MS;
   // §4 touch release: no touch frame for this long releases the held button
   // (initial 200 ms = 40 missed 5 ms frames). The time is compared with `>`
@@ -150,7 +153,12 @@ class SkywriterHIDMapper {
   // records final values for the tunables it contains.
   static const unsigned long AUTO_SCROLL_INTERVAL_MS;
 
-  explicit SkywriterHIDMapper(HIDMapperSink& sink) : sink_(sink) {}
+  explicit SkywriterHIDMapper(HIDMapperSink& sink) : sink_(sink) {
+    // §3 rule 6: the pace starts at the spec's named constant
+    // (REPORT_INTERVAL_MS); the firmware may re-target the live
+    // connection interval at runtime (P3.18, set_report_interval_ms).
+    report_interval_ms_ = REPORT_INTERVAL_MS;
+  }
 
   // ---- canonical sensor event inputs (§2), all carrying arrival time ----
 
@@ -185,6 +193,24 @@ class SkywriterHIDMapper {
   void onAirwheel(float degrees, unsigned long now_ms);
 
   // ---- time ----
+
+  // P3.18 (specs/ble_hid.md §7 / hid_mapping.md §3 rule 6): re-target the
+  // move-report cadence at the LIVE BLE connection interval the host
+  // negotiated. Section 7: move reports may be coalesced to the connection
+  // interval (button/press transitions must never be coalesced away — the
+  // click/press paths never route through this cadence), and the pointer
+  // rate must stay ≥ 60 Hz (≤ 16.7 ms per report). The firmware records the
+  // negotiated interval from the Bluetooth stack and passes it here; any
+  // value below 1 ms is clamped to 1 ms (the engine reports in whole
+  // milliseconds). The named REPORT_INTERVAL_MS constant is both the
+  // initial and the disconnect-reset value. Movement is ALWAYS fully
+  // accumulated in pending_dx_/dy_ before this cadence filters the
+  // emission, so a faster or slower pace re-times the reports but never
+  // drops or distorts the total movement (§3 rule 6's "never dropped").
+  void set_report_interval_ms(unsigned long interval_ms);
+
+  // The currently programmed move-report pace in ms (for tests / evidence).
+  unsigned long report_interval_ms() const { return report_interval_ms_; }
 
   // Advance the clock without events (the firmware's idle-loop call); also
   // evaluates lift-off gating and releases a due coalesced move report.
@@ -225,6 +251,13 @@ class SkywriterHIDMapper {
   float pending_dx_ = 0.0f;          // accumulated, not-yet-reported movement
   float pending_dy_ = 0.0f;          // (float: fractional GAIN carry-over)
   unsigned long last_report_ms_ = 0;     // when the last move report went out
+  // §3 rule 6 / P3.18: the live move-report pace. Set in the constructor
+  // below to the named REPORT_INTERVAL_MS constant; the firmware re-targets
+  // it at the host's negotiated BLE connection interval
+  // (set_report_interval_ms) and resets it to the constant in the
+  // disconnect path. Delta accumulation is independent of this value —
+  // only the emission moments move.
+  unsigned long report_interval_ms_;
 
   // AirWheel state (§5, P3.14): fractional wheel notch carry-over. The
   // accumulator holds whole+fractional notches; the whole part is drained

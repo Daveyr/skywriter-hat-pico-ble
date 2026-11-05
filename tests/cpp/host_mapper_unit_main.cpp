@@ -14,6 +14,10 @@
 //         kind: hold|tap|doubletap
 //     POSITION <x> <y> <ms>      mapper.onPosition(x, y, z=0, ms)
 //     AIRWHEEL <degrees> <ms>    mapper.onAirwheel(degrees, ms)
+//     PACE <ms>                  mapper.set_report_interval_ms(ms) — P3.18:
+//                                live connection-interval report pacing;
+//                                prints `PACE <applied ms>` (the clamped
+//                                value) as the applied-state record
 //     DISCONNECT <ms>            mapper.disconnect(ms) (P3.17: the BLE
 //                                link-loss path of specs/ble_hid.md §6)
 //     TICK <ms>                  mapper.tick(ms)
@@ -117,6 +121,16 @@ int main() {
         return 2;
       }
       mapper.onAirwheel(degrees, t);
+    } else if (strcmp(token, "PACE") == 0) {
+      unsigned long ms = 0;
+      if (sscanf(line, "%*15s %lu", &ms) != 1) {
+        fprintf(stderr, "bad PACE line: %s", line);
+        return 2;
+      }
+      mapper.set_report_interval_ms(ms);
+      // The applied (clamped) pace, so tests can assert the clamp without
+      // guessing at engine state.
+      printf("PACE %lu\n", mapper.report_interval_ms());
     } else if (strcmp(token, "DISCONNECT") == 0) {
       if (sscanf(line, "%*15s %lu", &t) != 1) {
         fprintf(stderr, "bad DISCONNECT line: %s", line);
