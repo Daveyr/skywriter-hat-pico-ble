@@ -170,6 +170,8 @@ docker run -it --rm \
    (150 ms silence → fresh baseline, no cursor flight); `expect.hid` is
    now a hard assertion for the eight armed scenarios, with the
    touch/AirWheel/gesture scenarios attributed to P3.13–P3.15 by a lint.
+   Update (2026-11-05, P3.13 commit `3c3e1de`): the touch semantics are
+   live — see the P3.13 Done entry; 54 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -254,17 +256,17 @@ library both use). Python driver fixes go to `library/`.
 ### 3d — Mapping engine (`pico-arduino/`, verifiable with fixtures)
 
 - [x] P3.12 → done, moved to the Done section below.
-- [ ] P3.13 Touch semantics per §4: press-once/repeat-inert, release after
-      `TOUCH_RELEASE_MS`, tap/doubletap click semantics, multi-button per
-      zone. Target `AC-MAP-02`, `AC-MAP-03`, `AC-MAP-07` release part
-      (fixtures F07, F08, F09, F10, F18).
+- [x] P3.13 → done, moved to the Done section below.
 - [ ] P3.14 Airwheel semantics per §5: 11.25°-quantized notches, sign,
       accumulator. Target `AC-MAP-04` wrap survivor (fixtures F11–F15).
       (Baseline rule settled by P3.14a — see the Done section.)
 - [ ] P3.15 Full §6 default mapping table as the single implementation table
       ("the table IS the implementation"), incl. garbage → nothing, reserved
       doubletap east/west → nothing, and media/consumer rows. Target
-      `AC-MAP-05`, `AC-MAP-06`.
+      `AC-MAP-05`, `AC-MAP-06`. Also owns the §6 hold auto-scroll rows
+      (`touch(north)` / `touch(south)` → wheel −1/+1 notch per 100 ms while
+      held) — allocated here by P3.13 (they need the P3.14 wheel semantics
+      and are §6 table rows, not button-state rows).
 - [ ] P3.15b Fixture-corpus gap fill (discovered by P3.2): the corpus has no
       scenario that exercises actual pointer movement (F01, then a second
       valid *moderately different* position → a real mouse delta), nor any
@@ -296,7 +298,13 @@ in Phase 4 on hardware
       `specs/ble_hid.md` §5, §6, §8 — battery reported 100 % at connect,
       drop reports while unconnected, neutral resync report on (re)connect,
       back to advertising on link loss. Target `AC-BLE-03`, `AC-BLE-07`
-      (verified in Phase 4).
+      (verified in Phase 4). Note from P3.13: the §4 "disconnect releases
+      all held buttons" rule needs a mapper API the engine deliberately
+      does not have yet (its private `release_all_buttons()` fires only on
+      lift-off; `finish()` is a movement flush and does not touch buttons,
+      by design) — add a public release-all entry point to
+      `SkywriterHIDMapper` and call it from the BLE (Bluetooth Low Energy)
+      disconnect path here.
 - [ ] P3.18 Firmware sketch: performance provisions per `specs/ble_hid.md`
       §7 — report pacing to the connection interval with delta accumulation,
       button/press transitions never coalesced away. Target `AC-BLE-04`
@@ -379,6 +387,57 @@ attribute table limit).
       driver-agnostic harness with a MicroPython-decoder adapter).
 
 ## Done
+
+- P3.13 — the §4 touch semantics are live in the mapping engine and the
+  §6 button rows are implemented (commit `3c3e1de`). The engine now turns
+  touch electrode events into the HID actions of `specs/hid_mapping.md`
+  §4 (AC-MAP-02, AC-MAP-03, and the button half of AC-MAP-07):
+  - `pico-arduino/SkywriterHID/src/SkywriterHIDMapper.{h,cpp}`: per-zone
+    press state (`held_` / `last_touch_ms_` for all five zones) — press on
+    the first touch frame only (repeats refresh the recency, never
+    re-press), release inferred per tick when a zone has been silent for
+    `TOUCH_RELEASE_MS` (200) longer (strict `>`, matching the lift-off
+    rule's style), lift-off (position silence > `LIFT_OFF_MS`) releases
+    every held button immediately via a new private
+    `release_all_buttons()`. Tap/doubletap → `sink.mouseClick(button,
+    1|2)`, one completed press+release each, never leaving a button held.
+    The §6 button table (anonymous-namespace `button_for`): touch(center)
+    hold → left, tap(center) → left, doubletap(center) → left ×2,
+    tap(east) → right, tap(west) → middle; the rows owned by later items
+    (north/south hold auto-scroll and their keyboard taps → P3.15;
+    reserved doubletap(east/west) → nothing) emit nothing deliberately.
+  - **Manifest re-authoring** (build-mode correction, documented in the
+    manifest): `touch_press_and_release`'s `expect.hid` was one down/up
+    pair with the prose "the F08 repeat must NOT re-press" — but its 250 ms
+    simulated gap EXCEEDS `TOUCH_RELEASE_MS` (200 ms), so the spec-correct
+    rule releases by silence at tick 205 ms and F08's frame at 250 ms is a
+    fresh acquisition (not a repeat), pressing again and releasing again
+    at 455 ms: the expectation is now the exact four records. The old
+    prose considered only a post-scenario release evaluation, which
+    contradicts §4's per-tick rule.
+  - **Repeat-inertness has no home in the fixture corpus**: any two touch
+    frames under 250 ms apart make the Python driver's repeat limiter
+    (default 4 Hz, a decorator feature — by design) drop the second event
+    while the C++ driver's dispatches it, so the canonical streams would
+    diverge with no honestly-annotatable ledger row. That behaviour is
+    pinned instead by direct mapper unit tests: new
+    `tests/test_mapper_unit.py` (10 tests) + host binary
+    `tests/cpp/host_mapper_unit_main.cpp` (drives the mapper at call
+    granularity — TOUCH/POSITION/TICK/FIN — printing the same HID records;
+    built via the same compiler resolution as the replay adapters). Covered
+    there: press-once + release-by-silence (incl. the strict-threshold
+    edge), repeat-inertness inside the window, re-acquisition after an
+    inferred release, lift-off (incl. "exactly LIFT_OFF_MS still held" and
+    "no position ever → lift-off never fires"), tap/doubletap click
+    counts, the §6 zone→button table, zone-independence, and the
+    non-button zones' silence.
+  - Arm flip: the four touch scenarios (`touch_press_and_release`,
+    `touch_two_zones`, `tap_center`, `doubletap_center`) are hard-asserted
+    end-to-end on the mapping adapter; `touch_with_position_and_airwheel`
+    is re-attributed to P3.14 alone (its button half is now live).
+    Also verified by an `arduino-cli` RP2040-target smoke sketch including
+    the mapper (throwaway, deleted after the run).
+  Verified: `bash run_tests.sh` green 4/4; 54 pytest tests (44 + 10).
 
 - P3.12 — the mapping engine exists and its pointer model is fully
   implemented and machine-asserted (commit `13f1698`). Specs rule out a
