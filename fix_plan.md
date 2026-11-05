@@ -80,8 +80,9 @@ docker run -it --rm \
 - **Baseline test run (2026-11-04, host)**: fixture corpus green; Python unit
   tests red (W5); `SkywriterInterrupt` example compiles green; `NeoPaint` and
   `SkyPainter` examples red — missing `Adafruit NeoPixel` library (W6).
-  Update (this commit): W6 is now verified green — see the W6 item. Remaining
-  known red: W5 (Python unit tests) only.
+  Update (this commit): W6 is now verified green — see the W6 item.
+  Update (2026-11-05, W5 commit): W5 is verified green too; every check in
+  `bash run_tests.sh` passes.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -120,15 +121,6 @@ docker run -it --rm \
       ignored so they never pollute commits.
 - [x] W2b `ralph.sh` — model pinned to `opencode-go/glm-5.3-flash`
       (`RALPH_MODEL` overridable) and stale-marker protocol (this commit).
-- [ ] W5 Make `bash run_tests.sh` fully green — Python unit tests:
-      `library/test.py` fails at import (`import mock` — a third-party
-      package, missing on the host) and would then fail inside `setup()` →
-      `get_status(0xA2)` (`RuntimeError` on the unconfigured mock — see
-      AGENTS.md Gotchas). Fix properly: use `unittest.mock` from the standard
-      library (one source, works everywhere) and make the mocked SMBus answer
-      the status handshake with the `specs/fixtures/F16_status_ack_a2.hex`
-      frame (single source of truth). Keep the test strictly offline
-      (no I2C, no network).
 - [x] W6 Make `bash run_tests.sh` fully green — firmware compiles: done and
       verified 2026-11-04. `Adafruit NeoPixel` 1.15.5 installed into the
       `skywriter-arduino` volume (`~/.arduino15/libraries/`), and the
@@ -295,3 +287,21 @@ attribute table limit).
   `ARDUINO_DIRECTORIES_USER=/home/dev/.arduino15` verified in the container
   (note: it points at the user directory root; arduino-cli appends
   `libraries/`). Host needs its own library install if tests run there.
+- W5 — Python unit tests fully green (this commit): `library/test.py` now
+  uses `unittest.mock` from the standard library (the third-party `mock`
+  import is gone), and the fake I2C bus answers the driver's startup
+  handshake with the recorded `specs/fixtures/F16_status_ack_a2.hex`
+  acknowledge frame, so the fixture directory stays the single source of
+  truth. The test stays strictly offline: it additionally asserts that
+  `setup()` writes the four sensor-configuration commands, reads the status
+  frame back four times, starts the background polling thread and stops it
+  cleanly, and that the `@skywriter.airwheel()` / `@skywriter.move()`
+  callbacks register. `bash run_tests.sh` is now green end-to-end.
+  Discovered while writing it (recorded here for whoever patches the test
+  next): with mocked module tables, `import RPi.GPIO as GPIO` binds the
+  child attribute of the fake `RPi` parent module — the parent mock must
+  carry the same object as `sys.modules['RPi.GPIO']`, or the driver's module
+  level `GPIO.RPI_REVISION` check silently sees a fresh unmatched Mock and
+  picks the wrong I2C bus number.
+- `run_tests.sh` comment for the Python unit test updated to reflect green
+  status (W5 row removed; details live here).

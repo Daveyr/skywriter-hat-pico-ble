@@ -54,7 +54,8 @@ EOF
 }
 
 # 2. Python driver unit tests (mocked hardware — no real I2C allowed).
-# Known red until fix_plan.md item W5 is done (see AGENTS.md Gotchas).
+# Offline: the fake I2C bus answers the startup handshake with the recorded
+# specs/fixtures/F16_status_ack_a2.hex frame (W5).
 library_unit() {
   (cd library && python3 test.py)
 }
