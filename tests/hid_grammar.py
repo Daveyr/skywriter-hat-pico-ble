@@ -23,9 +23,9 @@ What this module verifies today is **well-formedness** (every ``expect.hid``
 list parses against the grammar above) — plus, since fix item P3.12, the
 scenarios listed in ``MAPPING_ENGINE_ARMED`` (``tests/test_scenarios.py``)
 are replay-asserted against the live mapping engine (``tests/adapters_mapping.py``);
-the remaining scenarios' replay assertions open with P3.15, which
-targets exactly the scenarios still pending (the manifest is their
-machine-readable acceptance data).
+since fix item P3.15 the full §6 mapping table is implemented in the
+engine, so every manifest scenario is armed and the pending-attribution
+table in ``tests/test_scenarios.py`` is empty.
 '''
 
 MOUSE_ACTIONS = {

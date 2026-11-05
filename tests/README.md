@@ -90,17 +90,19 @@ validated for every scenario; the scenarios in `MAPPING_ENGINE_ARMED`
 are additionally **replay-asserted end-to-end** against `SkywriterHIDMapper`
 through the mapping adapter — the pointer-model and always-silent scenarios
 armed with P3.12, the touch scenarios with P3.13, the AirWheel scenarios
-with P3.14, and everything not yet
-armed is attributed to its opening fix item in `MAPPING_ENGINE_PENDING`
-(linted so every new scenario must be classified). P3.15 opens
-the remaining rows as they land. Behaviours the corpus cannot carry because of
+with P3.14, and the gesture/media scenarios with P3.15 (since P3.15 the
+full §6 table is implemented in the engine, every manifest scenario is
+armed, and `MAPPING_ENGINE_PENDING` is empty — it exists only as the
+classification home for future scenarios the engine does not yet serve).
+Behaviours the corpus cannot carry because of
 the Python driver's by-design touch-repeat limiting (default 4 Hz — a repeat
 touch frame under 250 ms would make the decoders' canonical streams diverge
 undecoratably), such as repeat-inert presses and exact release/lift-off tick
 timing, are pinned by the direct mapper unit tests in `test_mapper_unit.py`
 against the same engine source the firmware links (which also carries the
 §5 AirWheel pins: notch quantization, sign, fractional accumulation,
-un-coalesced emission, lift-off reset).
+un-coalesced emission, lift-off reset, plus the §6 keyboard/media/hold
+auto-scroll row pins).
 
 ## Scope note for the loop
 

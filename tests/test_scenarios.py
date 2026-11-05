@@ -17,8 +17,8 @@ adapter) and checked against its machine-checkable expectations:
   ``MAPPING_ENGINE_ARMED`` are additionally replay-asserted against the
   mapping engine end-to-end (P3.12 armed the pointer-model and
   always-silent scenarios, P3.13 the touch scenarios, P3.14 the AirWheel
-  scenarios; P3.15 opens the rest — see
-  ``MAPPING_ENGINE_PENDING`` and the arm-coverage test below),
+  scenarios, and P3.15 the gesture/media scenarios — the full §6 table; the
+  pending-attribution table is empty since then),
 - cross-driver parity — where both decoders emit an event, the canonical
   streams must agree (AC-MAP-09), except for event omissions attributable to
   a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
@@ -45,8 +45,9 @@ DRIVERS = ('python', 'cpp')
 # events → mapper, one host binary). A scenario lands in
 # MAPPING_ENGINE_ARMED once the engine implements the behaviour its
 # records claim — the pointer-model scenarios arm here (P3.12), the touch
-# scenarios since P3.13, the AirWheel scenarios since P3.14; the gesture
-# scenarios open with P3.15 (see MAPPING_ENGINE_PENDING).
+# scenarios since P3.13, the AirWheel scenarios since P3.14, and the
+# gesture/media scenarios since P3.15 (the full §6 table — see
+# MAPPING_ENGINE_PENDING).
 MAPPING_ENGINE_ARMED = frozenset({
     # Pointer model (§3, P3.12): baseline-only first position, jump
     # rejection, real movement with GAIN/sign, lift-off re-baseline.
@@ -69,26 +70,27 @@ MAPPING_ENGINE_ARMED = frozenset({
     'airwheel_quarter_turn_cw',
     'airwheel_wrap',
     'touch_with_position_and_airwheel',
-    # Events the §6 table (once filled) must map to nothing: garbage
-    # gesture rows and the control frames. The mapper accepts these kinds
-    # of events today and emits nothing yet — the assertions stop any row
-    # from sneaking out untested.
+    # Gesture rows (§6, P3.15): horizontal flicks → track-skip media keys,
+    # vertical flicks and circles → volume keys, garbage → nothing.
+    'flick_west_east',
+    'flick_east_west',
+    'edge_flick_east_west',
+    'circle_clockwise',
+    'circle_counter_clockwise',
+    # Events the §6 table maps to nothing must provably stay silent on the
+    # HID side: garbage gesture rows and the control frames.
     'gesture_in_progress',
     'garbage_gesture',
     'status_ack',
     'fw_version_valid',
 })
 
-# Scenario name → fix item(s) whose engine rows open its HID replay
-# assertion. Linted to cover every manifest scenario not in ARMED.
-MAPPING_ENGINE_PENDING = {
-    # Gesture → media/consumer rows (§6, P3.15).
-    'flick_west_east': ('P3.15',),
-    'flick_east_west': ('P3.15',),
-    'edge_flick_east_west': ('P3.15',),
-    'circle_clockwise': ('P3.15',),
-    'circle_counter_clockwise': ('P3.15',),
-}
+# Scenario → fix item(s) that opened its HID replay assertion. Empty since
+# P3.15: every manifest scenario is live in MAPPING_ENGINE_ARMED (the §6
+# table is fully implemented in SkywriterHIDMapper). A newly added scenario
+# that is NOT implementable with the current engine gets an entry here; the
+# arm-coverage lint below attributes anything unclassified to a fix item.
+MAPPING_ENGINE_PENDING = {}
 
 
 @pytest.fixture(scope='session')

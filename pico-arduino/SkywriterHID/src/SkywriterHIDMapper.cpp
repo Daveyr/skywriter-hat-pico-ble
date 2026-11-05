@@ -1,5 +1,7 @@
-// SkywriterHIDMapper.cpp — the pointer model of specs/hid_mapping.md §3
-// (fix item P3.12, target AC-MAP-01). See the header for the contract.
+// SkywriterHIDMapper.cpp — the full sensor-event → HID mapping engine of
+// specs/hid_mapping.md §3–§6 (P3.12 pointer model, P3.13 touch semantics,
+// P3.14 AirWheel scroll, P3.15 the complete §6 default mapping profile).
+// The §6 table lives in the row helpers below; see the header contract.
 
 #include "SkywriterHIDMapper.h"
 
@@ -16,6 +18,10 @@ const bool SkywriterHIDMapper::AIRWHEEL_ENABLED = true;
 // the header note — not a tunable feel parameter).
 const float SkywriterHIDMapper::AIRWHEEL_NOTCH_DEGREES = 11.25f;
 
+// §6: one wheel notch per AUTO_SCROLL_INTERVAL_MS while the hold lasts,
+// row-cited in hold_action_for below.
+const unsigned long SkywriterHIDMapper::AUTO_SCROLL_INTERVAL_MS = 100;
+
 namespace {
 // Deterministic round-half-away-from-zero: report deltas are whole cursor
 // units, and everything after the point stays in the accumulator so
@@ -25,29 +31,123 @@ inline long round_half_away(float v) {
                    : static_cast<long>(v - 0.5f);
 }
 
-// §6 default mapping profile — the BUTTON rows (fix item P3.13):
-//   touch(center) hold → left; tap(center) → left; doubletap(center) → left
-//   double-click; tap(east) → right; tap(west) → middle.
-// Deliberately absent here, owned by other fix items:
-//   - touch(north/south) hold → auto-scroll (needs the §5 wheel; P3.15),
-//   - tap(north/south) → keyboard Page Up/Down (P3.15),
-//   - doubletap(east/west) → nothing, reserved by §6 (documented with P3.15).
-// -1 = no button row for this zone/kind.
-int button_for(SensorZone zone, TouchKind kind) {
-  switch (kind) {
-    case TOUCH_HOLD:
-      return zone == ZONE_CENTER ? static_cast<int>(HID_BUTTON_LEFT) : -1;
-    case TOUCH_TAP:
-      switch (zone) {
-        case ZONE_CENTER: return static_cast<int>(HID_BUTTON_LEFT);
-        case ZONE_EAST:   return static_cast<int>(HID_BUTTON_RIGHT);
-        case ZONE_WEST:   return static_cast<int>(HID_BUTTON_MIDDLE);
-        default:          return -1;
-      }
-    case TOUCH_DOUBLETAP:
-      return zone == ZONE_CENTER ? static_cast<int>(HID_BUTTON_LEFT) : -1;
+// ---- THE §6 DEFAULT MAPPING PROFILE (hid_mapping.md §6, fix item P3.15) --
+//
+// §7: "the mapping table of §6 IS the implementation; one static table
+// mapping (event kind, value) → HID action". What follows is that one
+// table, in row order, one lookup helper per event kind — no second copy
+// exists anywhere (a config override only ever edits these rows).
+//
+// Touch rows: every TouchInfo (zone, kind) cell of the table.
+//   hold:   center → left button; north → auto-scroll (wheel −1/interval);
+//           south → auto-scroll (wheel +1/interval); west/east → no row
+//           (recency is still tracked for §4 semantics).
+//   tap:    center → left click; east → right click; west → middle click;
+//           north → keyboard Page Up; south → keyboard Page Down.
+//   dbltap: center → left double-click; north → media Scan Next Track;
+//           south → media Scan Previous Track; east/west → reserved
+//           → nothing (deliberate §6 row, not a gap).
+
+// A hold row's action: button = a physical HID button held down (−1 none),
+// wheel = the per-interval auto-scroll notch direction (0 none).
+struct HoldAction {
+  int button;  // HIDButton or −1
+  int wheel;   // −1 / 0 / +1 notches per AUTO_SCROLL_INTERVAL_MS
+};
+
+constexpr int NO_BUTTON = -1;
+constexpr int NO_SCROLL = 0;
+constexpr int NOT_A_ROW = -1;
+constexpr int NO_USAGE = -1;
+
+HoldAction hold_action_for(SensorZone zone) {
+  switch (zone) {
+    case ZONE_CENTER:
+      // §6 "touch(center) hold → Left button down/up (§4)".
+      return {static_cast<int>(HID_BUTTON_LEFT), NO_SCROLL};
+    case ZONE_NORTH:
+      // §6 "touch(north) hold → Auto-scroll up: wheel −1 notch per 100 ms
+      // while held" (the wheel sign is §6's own literal: north auto-scroll
+      // emits NEGATIVE notches, distinct from §5's clockwise-positive
+      // convention — the row is written as the spec's wheel delta).
+      return {NO_BUTTON, -1};
+    case ZONE_SOUTH:
+      // §6 "touch(south) hold → Auto-scroll down: wheel +1 notch per 100 ms
+      // while held".
+      return {NO_BUTTON, +1};
+    default:
+      // No §6 hold row for west/east — §4 press/release state still tracked
+      // by the engine so a future row or firmware override plugs in.
+      return {NO_BUTTON, NO_SCROLL};
   }
-  return -1;
+}
+
+// §6 tap rows: the mouse-click cells; −1 where the row is a keyboard row
+// or none.
+int tap_click_button_for(SensorZone zone) {
+  switch (zone) {
+    case ZONE_CENTER:
+      // §6 "tap(center) → Left click".
+      return static_cast<int>(HID_BUTTON_LEFT);
+    case ZONE_EAST:
+      // §6 "tap(east) → Right click".
+      return static_cast<int>(HID_BUTTON_RIGHT);
+    case ZONE_WEST:
+      // §6 "tap(west) → Middle click".
+      return static_cast<int>(HID_BUTTON_MIDDLE);
+    default:
+      return NOT_A_ROW;  // north/south → keyboard rows below; others none
+  }
+}
+
+// §6 keyboard rows: "tap(north) → Keyboard Page Up",
+// "tap(south) → Keyboard Page Down"; −1 where the row is a click or none.
+int tap_key_usage_for(SensorZone zone) {
+  switch (zone) {
+    case ZONE_NORTH: return HID_USAGE_PAGE_UP;    // §6 row
+    case ZONE_SOUTH: return HID_USAGE_PAGE_DOWN;  // §6 row
+    default:         return NOT_A_ROW;
+  }
+}
+
+// §6 doubletap rows — the click cell ("doubletap(center) → Double click"
+// = two left clicks); −1 where the row is media or reserved- nothing.
+int doubletap_click_button_for(SensorZone zone) {
+  return zone == ZONE_CENTER
+             ? static_cast<int>(HID_BUTTON_LEFT)  // §6 row
+             : NOT_A_ROW;  // north/south → media rows below; east/west
+                           // "doubletap(east)/doubletap(west) → nothing
+                           // (reserved)"
+}
+
+// §6 doubletap rows — the media cells; −1 where the row is a click or the
+// reserved do-nothing cells (east/west).
+int doubletap_consumer_usage_for(SensorZone zone) {
+  switch (zone) {
+    case ZONE_SOUTH: return HID_USAGE_CONSUMER_PREV_TRACK;  // §6 row
+    case ZONE_NORTH: return HID_USAGE_CONSUMER_NEXT_TRACK;  // §6 row
+    default:         return NOT_A_ROW;
+  }
+}
+
+// §6 gesture rows ("gesture(2 … flick W→E)" etc., read by Wire code):
+//   code 2 → Scan Next Track, code 3 → Scan Previous Track,
+//   code 4 → Volume Increment (repeats per event), code 5 → Volume Decrement,
+//   code 6 → Volume Increment, code 7 → Volume Decrement (circle rows —
+//   dormant on hardware while AirWheel is enabled, the sensor-constraint
+//   note of §6; the mapper maps them whenever the sensor emits a circle
+//   code, because §6 makes that a sensor constraint, not an implementation
+//   choice), code 1 → garbage → *nothing*, and any unknown code → nothing.
+int gesture_consumer_usage_for(uint8_t code) {
+  switch (code) {
+    case 2: return HID_USAGE_CONSUMER_NEXT_TRACK;   // flick W→E
+    case 3: return HID_USAGE_CONSUMER_PREV_TRACK;   // flick E→W
+    case 4: return HID_USAGE_CONSUMER_VOLUME_UP;    // flick S→N
+    case 5: return HID_USAGE_CONSUMER_VOLUME_DOWN;  // flick N→S
+    case 6: return HID_USAGE_CONSUMER_VOLUME_UP;    // circle CW
+    case 7: return HID_USAGE_CONSUMER_VOLUME_DOWN;  // circle CCW
+    default: return NO_USAGE;                       // garbage + unknowns
+  }
 }
 }  // namespace
 
@@ -86,45 +186,77 @@ void SkywriterHIDMapper::onPosition(uint16_t x, uint16_t y, uint16_t /*z*/,
 }
 
 void SkywriterHIDMapper::onTouch(SensorZone zone, TouchKind kind,
-                                 unsigned long now_ms) {
-  const int button = button_for(zone, kind);
-
+                                  unsigned long now_ms) {
   if (kind == TOUCH_HOLD) {
     // §2: the touch bit repeats in every frame while the finger is on the
     // electrode. Track the recency for release-by-silence whatever the §6
     // mapping says (every zone, pressed or not).
     last_touch_ms_[zone] = now_ms;
-    if (button < 0) {
-      // No §6 holdbutton row for this zone: nothing to press (auto-scroll
-      // lands with P3.15); its recency is still tracked above.
+    const HoldAction action = hold_action_for(zone);
+    if (action.button < 0 && action.wheel == NO_SCROLL) {
+      // No §6 hold row for this zone: nothing to engage; its §4 recency
+      // was still tracked above.
       return;
     }
     if (held_[zone]) {
-      return;  // §4: press-once — repeats do not re-trigger the press
+      return;  // §4: press-once — repeats do not re-trigger the engage
     }
-    // §6: touch(center) hold → left button down (multi-button: each zone
-    // has fully independent press state, §4).
+    // §6 hold row: touch(center) → left button down (multi-button: each
+    // zone has fully independent press state, §4); touch(north/south) →
+    // hold auto-scroll begins. Deliberate engine decision (engine note,
+    // recorded in the P3.15 ledger entry): the FIRST auto-scroll notch is
+    // emitted immediately at hold start ("while held" reads as the hold
+    // itself producing scrolls), then one notch per AUTO_SCROLL_INTERVAL_MS
+    // from tick(). held_ records the engaged hold; the interval clock
+    // starts at the press.
     held_[zone] = true;
-    sink_.mouseButton(static_cast<uint8_t>(button), true);
+    last_autoscroll_ms_[zone] = now_ms;
+    if (action.button >= 0) {
+      sink_.mouseButton(static_cast<uint8_t>(action.button), true);
+    } else {
+      sink_.mouseWheel(static_cast<int8_t>(action.wheel));
+    }
     return;
   }
 
   // §4: tap(zone) → press + release of TAP_CLICK_MS; doubletap(zone) → two
   // of those clicks. The click is driven as one completed sink action, so
   // a tap/doubletap never leaves a button held and its press/release never
-  // straddle a coalesced period. Zones without a §6 row (doubletap
-  // east/west reserved → nothing; tap(north/south) keyboard rows, P3.15)
-  // fall through silently.
+  // straddle a coalesced period. The §6 table's non-click cells dispatch
+  // through their own report channel (tap(north/south) → keyboard, media
+  // doubletap rows → consumer); rows mapped to *nothing* (doubletap
+  // east/west reserved) fall through silently.
+  const int button = kind == TOUCH_TAP ? tap_click_button_for(zone)
+                                       : doubletap_click_button_for(zone);
   if (button >= 0) {
     sink_.mouseClick(static_cast<uint8_t>(button),
                      kind == TOUCH_DOUBLETAP ? 2 : 1);
+    return;
+  }
+  const int usage = kind == TOUCH_TAP ? tap_key_usage_for(zone)
+                                      : doubletap_consumer_usage_for(zone);
+  if (usage >= 0) {
+    if (kind == TOUCH_TAP) {
+      sink_.keyboardPress(static_cast<uint8_t>(usage));  // §6 keyboard rows
+    } else {
+      sink_.consumerPress(static_cast<uint16_t>(usage));  // §6 media rows
+    }
   }
 }
 
-void SkywriterHIDMapper::onGesture(uint8_t /*code*/, unsigned long /*now_ms*/) {
-  // §6 gesture rows (media keys, volume) land with fix item P3.15 — the
-  // garbage row (code 1 → nothing) and the reserved doubletap(east/west)
-  // → nothing rows come with it.
+void SkywriterHIDMapper::onGesture(uint8_t code, unsigned long now_ms) {
+  // §6 gesture rows (fix item P3.15, target AC-MAP-05): one consumer-report
+  // press per gesture event (the §6 "repeats per event" note — no repeat
+  // limiting here, one event is one media action). The time argument is
+  // unused: consumer presses are emitted immediately, un-coalesced, like
+  // wheel deltas (§5's latency principle). garbage (code 1) is the §6
+  // "gesture(1 … garbage) → nothing" row: an accepted-and-dropped event,
+  // deliberately silent.
+  (void)now_ms;
+  const int usage = gesture_consumer_usage_for(code);
+  if (usage >= 0) {
+    sink_.consumerPress(static_cast<uint16_t>(usage));
+  }
 }
 
 void SkywriterHIDMapper::onAirwheel(float degrees, unsigned long /*now_ms*/) {
@@ -181,19 +313,40 @@ void SkywriterHIDMapper::tick(unsigned long now_ms) {
     // into the next rotation gesture.
     wheel_acc_ = 0.0f;
     // §4 explicit-release trigger: the hand left the field, so every held
-    // button goes up immediately (whatever the touch silence says).
+    // hold-row (button or auto-scroll) goes up/clears immediately
+    // (whatever the touch silence says).
     release_all_buttons();
   }
   // §4 release is inferred: no touch frame for TOUCH_RELEASE_MS releases
-  // the zone's held button. Each zone is independent, and an arriving
-  // touch frame keeps refreshing its recency (onTouch) without pressing.
+  // the zone's engage. Each zone is independent, and an arriving touch
+  // frame keeps refreshing its recency (onTouch) without re-engaging.
   for (int zone = 0; zone < kZoneCount; ++zone) {
     if (held_[zone] && now_ms - last_touch_ms_[zone] > TOUCH_RELEASE_MS) {
       held_[zone] = false;
-      sink_.mouseButton(
-          static_cast<uint8_t>(
-              button_for(static_cast<SensorZone>(zone), TOUCH_HOLD)),
-          false);
+      // §6: only the button hold rows carry an "up" transition; the
+      // auto-scroll rows have no button state to release — the hold's
+      // end IS the scrolling stopping (below).
+      const HoldAction action =
+          hold_action_for(static_cast<SensorZone>(zone));
+      if (action.button >= 0) {
+        sink_.mouseButton(static_cast<uint8_t>(action.button), false);
+      }
+    }
+  }
+  // §6 hold auto-scroll rows (fix item P3.15): while touch(north) or
+  // touch(south) is held, one wheel notch per AUTO_SCROLL_INTERVAL_MS,
+  // emitted immediately and un-coalesced (scroll feel is latency-sensitive,
+  // the §5 emission principle). The interval clocks from the hold start
+  // (onTouch), so notch #1 was already the press-time emission. Checked
+  // after the release loop, so a hold released by silence on this very
+  // tick never scrolls again. Both rows may engage at once (independent
+  // zones, §4) — the deltas then alternate, §6 needs no arbitration.
+  for (int zone = 0; zone < kZoneCount; ++zone) {
+    const HoldAction action = hold_action_for(static_cast<SensorZone>(zone));
+    if (held_[zone] && action.wheel != NO_SCROLL &&
+        now_ms - last_autoscroll_ms_[zone] >= AUTO_SCROLL_INTERVAL_MS) {
+      last_autoscroll_ms_[zone] = now_ms;
+      sink_.mouseWheel(static_cast<int8_t>(action.wheel));
     }
   }
   attempt_report(now_ms, false);
@@ -203,10 +356,14 @@ void SkywriterHIDMapper::release_all_buttons() {
   for (int zone = 0; zone < kZoneCount; ++zone) {
     if (held_[zone]) {
       held_[zone] = false;
-      sink_.mouseButton(
-          static_cast<uint8_t>(
-              button_for(static_cast<SensorZone>(zone), TOUCH_HOLD)),
-          false);
+      // §6: releases broadcast only for the button hold rows; clearing an
+      // auto-scroll hold is silent (its scroll cadence just stops — the
+      // loop above is its only emission site).
+      const HoldAction action =
+          hold_action_for(static_cast<SensorZone>(zone));
+      if (action.button >= 0) {
+        sink_.mouseButton(static_cast<uint8_t>(action.button), false);
+      }
     }
   }
 }

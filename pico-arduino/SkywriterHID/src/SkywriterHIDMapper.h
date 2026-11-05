@@ -13,11 +13,16 @@
 // jump rejection + re-baseline, lift-off gating, report cadence,
 // press-once/repeat-inert holds, release-by-silence, tap/doubletap clicks,
 // the §6 button rows, and the wheel-notch conversion, sign, fractional
-// accumulator and lift-off reset of the rotation (scroll) stream. The
-// remaining §6 mapping-table rows (media/consumer, keyboard, hold
-// auto-scroll) land with fix item P3.15: the mapper already accepts those
-// kinds of events and maps them to nothing until then (an
-// accepted-and-dropped event, deliberately silent — not a wrong output).
+// accumulator and lift-off reset of the rotation (scroll) stream.
+//
+// The FULL §6 default mapping profile is implemented here since P3.15: the
+// §6 table below is the one implementation table the spec requires (§7 "the
+// table IS the implementation") — every (event, value) → HID action row of
+// hid_mapping.md §6 lives in SkywriterHIDMapper.cpp's row lookup helpers
+// (each row cited by line), and no second copy of the mapping exists. Rows
+// that map an event to *nothing* by design are equally table rows:
+// gesture code 1 (garbage), the reserved doubletap(east/west), and the
+// control frames' "No HID output" (§2).
 
 #ifndef SKYWRITER_HID_MAPPER_H
 #define SKYWRITER_HID_MAPPER_H
@@ -43,7 +48,7 @@ enum TouchKind : uint8_t {
 };
 
 // Physical HID buttons in §6 order: center = left (primary), west = middle,
-// east = right. (§4/P3.13 will use these the §6-zone mapping rows.)
+// east = right. (Used by the §6 touch-row helpers below.)
 enum HIDButton : uint8_t {
   HID_BUTTON_LEFT = 0,
   HID_BUTTON_MIDDLE = 1,
@@ -51,9 +56,19 @@ enum HIDButton : uint8_t {
 };
 
 // USB HID usage codes for the keyboard rows of §6 (Page Up / Page Down):
-// Page Up = 0x4E (78), Page Down = 0x4F (79). (used from P3.13/P3.15 on.)
+// Page Up = 0x4E (78), Page Down = 0x4F (79). (The §6 keyboard rows use
+// these from the §6 table below.)
 static const uint8_t HID_USAGE_PAGE_UP = 78;
 static const uint8_t HID_USAGE_PAGE_DOWN = 79;
+
+// USB HID usage codes for the consumer-control (media) rows of §6,
+// decimal: Scan Next Track = 0x00B5 (181), Scan Previous Track =
+// 0x00B6 (182), Volume Increment = 0x00E9 (233), Volume Decrement =
+// 0x00EA (234). The flick/circle/media rows below map onto these.
+static const uint16_t HID_USAGE_CONSUMER_NEXT_TRACK = 181;
+static const uint16_t HID_USAGE_CONSUMER_PREV_TRACK = 182;
+static const uint16_t HID_USAGE_CONSUMER_VOLUME_UP = 233;
+static const uint16_t HID_USAGE_CONSUMER_VOLUME_DOWN = 234;
 
 // Where the HID actions go. One sink method per report-channel action of
 // `specs/hid_mapping.md` §3–§6 — the firmware sink will call MouseBLE /
@@ -127,6 +142,13 @@ class SkywriterHIDMapper {
   // maps to exactly one wheel notch. Datasheet-derived, NOT a tunable —
   // it is the sensor's own quantization, not a feel parameter.
   static const float AIRWHEEL_NOTCH_DEGREES;
+  // §6 hold auto-scroll cadence (initial 100 ms): while touch(north) or
+  // touch(south) is held, one wheel notch is emitted per this interval —
+  // §6's own row timing ("wheel −1 notch per 100 ms while held"), cited
+  // next to the row helper in the .cpp. Not a §7 tunable: the §7 tunable
+  // list is fixed by the spec, and the hardware loop's P4.5 tuning only
+  // records final values for the tunables it contains.
+  static const unsigned long AUTO_SCROLL_INTERVAL_MS;
 
   explicit SkywriterHIDMapper(HIDMapperSink& sink) : sink_(sink) {}
 
@@ -138,13 +160,19 @@ class SkywriterHIDMapper {
   void onPosition(uint16_t x, uint16_t y, uint16_t z, unsigned long now_ms);
 
   // touch/tap/doubletap(zone) — §4 semantics (press-once/repeat-inert,
-  // release-by-silence via tick(), tap/doubletap clicks) plus the §6 button
-  // rows: touch(center) hold → left, tap(center) → left, doubletap(center)
-  // → left ×2, tap(east) → right, tap(west) → middle.
+  // release-by-silence via tick(), tap/doubletap clicks) plus the full §6
+  // touch-row table: touch(center) hold → left button, touch(north) hold →
+  // auto-scroll up (wheel −1 per interval), touch(south) hold → auto-scroll
+  // down (wheel +1 per interval), tap(center/east/west) → left/right/middle
+  // clicks, tap(north) → keyboard Page Up, tap(south) → Page Down,
+  // doubletap(center) → left ×2, doubletap(north/south) → media next /
+  // previous track; doubletap(east/west) reserved → nothing.
   void onTouch(SensorZone zone, TouchKind kind, unsigned long now_ms);
 
-  // gesture(code, class, edge) — only the code is needed by §6. Rows land
-  // with P3.15; garbage (code 1) maps to nothing there.
+  // gesture(code, class, edge) — only the code feeds the §6 table: the
+  // horizontal flicks are track-skip media keys, the vertical flicks and
+  // circles are volume keys, and garbage (code 1) maps to nothing (§6).
+  // The class/edge attributes carry no row of their own.
   void onGesture(uint8_t code, unsigned long now_ms);
 
   // airwheel(degrees) — signed rotation delta of this frame (positive =
@@ -170,7 +198,8 @@ class SkywriterHIDMapper {
   void attempt_report(unsigned long now_ms, bool force);
   // §4 explicit-release trigger (lift-off; a future disconnect path would
   // call the same via a public wrapper when the firmware needs it, P3.17):
-  // every held button goes up immediately, in zone order.
+  // every held hold-row (buttons and auto-scroll) goes up/clears
+  // immediately, in zone order.
   void release_all_buttons();
 
   HIDMapperSink& sink_;
@@ -192,12 +221,17 @@ class SkywriterHIDMapper {
   float wheel_acc_ = 0.0f;
 
   // Touch state (§4): the sensor has no release event, so each zone tracks
-  // its own press state. held_ is only ever set for zones that have a §6
-  // hold button (currently center); last_touch_ms_ is tracked for every
-  // zone so repeats refresh the recency whatever the mapping says.
+  // its own press state. held_ is only ever set for zones whose §6 hold row
+  // maps to something (center: a button; north/south: hold auto-scroll);
+  // last_touch_ms_ is tracked for every zone so repeats refresh the recency
+  // whatever the mapping says.
   static const int kZoneCount = 5;   // south, west, north, east, center
-  bool held_[kZoneCount] = {};       // zone's button is currently down
+  bool held_[kZoneCount] = {};       // zone's hold row is currently engaged
   unsigned long last_touch_ms_[kZoneCount] = {};  // last touch frame seen
+  // §6 auto-scroll cadence state: when the zone's hold row began emitting
+  // (press time — the first notch is immediate), so tick() can pace one
+  // notch per AUTO_SCROLL_INTERVAL_MS while the hold lasts.
+  unsigned long last_autoscroll_ms_[kZoneCount] = {};
 };
 
 #endif  // SKYWRITER_HID_MAPPER_H

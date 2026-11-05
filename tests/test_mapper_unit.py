@@ -1,5 +1,6 @@
 '''Direct SkywriterHIDMapper unit tests for the §4 touch semantics
-(fix_plan item P3.13) and the §5 AirWheel semantics (fix_plan item P3.14).
+(fix_plan item P3.13), the §5 AirWheel semantics (fix_plan item P3.14) and
+the §6 keyboard/media/hold-auto-scroll rows (fix_plan item P3.15).
 
 Some timing behaviours cannot live in the fixture corpus: the Python driver
 rate-limits repeat touch callbacks by design (default 4 Hz = one dispatch
@@ -14,14 +15,18 @@ drive it at call granularity through the host unit binary in
 `tests/cpp/host_mapper_unit_main.cpp` (built with the same compiler
 resolution as the replay adapters — g++/c++ → zig → ziglang wheel).
 
-Spec: `specs/hid_mapping.md` §4 + §6 button rows, targets AC-MAP-02,
-AC-MAP-03 and the release half of AC-MAP-07; the AirWheel section pins §5
-(AC-MAP-04). Timing uses the engine's own
-named constants (TOUCH_RELEASE_MS 200, TAP_CLICK_MS 50, LIFT_OFF_MS 100,
-AIRWHEEL_NOTCH_DEGREES 11.25), so a hardware-tune change (P4.5)
-auto-propagates into the arithmetic below
-where it matters; scripts are written in terms of the threshold semantics,
-not magic tick numbers, wherever possible.
+Spec: `specs/hid_mapping.md` §4 + §6 rows, targets AC-MAP-02, AC-MAP-03 and
+the release half of AC-MAP-07; the AirWheel section pins §5 (AC-MAP-04);
+the P3.15 section pins the tap(north/south) keyboard rows, the
+doubletap(north/south) media rows, the reserved doubletap(east/west)
+silence and the §6 hold auto-scroll cadence (AC-MAP-05/06's §6 side; the
+gesture→consumer rows themselves are replay-asserted end-to-end through
+the fixture scenarios, which the firmware chain serves). Timing uses the
+engine's own named constants (TOUCH_RELEASE_MS 200, TAP_CLICK_MS 50,
+LIFT_OFF_MS 100, AIRWHEEL_NOTCH_DEGREES 11.25, AUTO_SCROLL_INTERVAL_MS
+100), so a hardware-tune change (P4.5) auto-propagates into the arithmetic
+below where it matters; scripts are written in terms of the threshold
+semantics, not magic tick numbers, wherever possible.
 '''
 
 import hashlib
@@ -223,17 +228,172 @@ def test_zones_track_press_state_independently():
     assert records == [_button('left', 'down'), _button('left', 'up')], records
 
 
-def test_non_button_zones_produce_nothing():
-    '''Zones whose §6 row is not a button emit nothing yet: touch(east/west)
-    hold and doubletap(east/west) (reserved → nothing). tap(north/south)
-    keys and the holds' auto-scroll land with P3.15 — deliberately not
-    asserted silent here, so this file never goes stale against the spec.'''
+def test_non_button_zones_produce_nothing_on_reserved_cells():
+    '''§6 reserved/no-row cells emit nothing: touch(east)/touch(west) holds
+    have no §6 hold row (recency-only, §4), and doubletap(east/west) are
+    the reserved → *nothing* rows (P3.15: "deliberately unmapped to avoid
+    accidental triggers").'''
     records = _run([
         ('TOUCH east hold', 0),
         ('TOUCH west doubletap', 5),
         ('TICK', 1000),
     ])
     assert records == [], records
+
+
+# ------------------------------------ §6 tap/doubletap keyboard + media rows
+# (fix_plan P3.15 — the rows the P3.13 engine deliberately left silent)
+
+def _key(usage):
+    return f'HID KEY {usage}'
+
+
+def _consume(usage):
+    return f'HID CONSUME {usage}'
+
+
+def test_tap_north_south_are_page_up_page_down():
+    '''§6 rows: tap(north) → keyboard Page Up, tap(south) → Page Down
+    (usage 0x4E = 78 / 0x4F = 79, on the keyboard report — hid_grammar
+    pins the usage↔key correspondence; _key carries the raw usage).'''
+    records = _run([
+        ('TOUCH north tap', 0),
+        ('TOUCH south tap', 5),
+        ('TICK', 1000),
+    ])
+    assert records == [
+        _key(78),   # HID_USAGE_PAGE_UP
+        _key(79),   # HID_USAGE_PAGE_DOWN
+    ], records
+
+
+def test_doubletap_north_south_are_media_track_skip():
+    '''§6 rows: doubletap(north) → Consumer Scan Next Track (0x00B5 = 181),
+    doubletap(south) → Scan Previous Track (0x00B6 = 182).'''
+    records = _run([
+        ('TOUCH north doubletap', 0),
+        ('TOUCH south doubletap', 5),
+        ('TICK', 1000),
+    ])
+    assert records == [
+        _consume(181),   # HID_USAGE_CONSUMER_NEXT_TRACK
+        _consume(182),   # HID_USAGE_CONSUMER_PREV_TRACK
+    ], records
+
+
+def test_reserved_doubletap_east_west_stay_silent():
+    '''§6 reserved cells: doubletap(east) and doubletap(west) deliberately
+    map to nothing (kept pinned beside the now-live rows so the remap to a
+    real action cannot sneak in untested).'''
+    records = _run([
+        ('TOUCH east doubletap', 0),
+        ('TOUCH west doubletap', 5),
+        ('TICK', 1000),
+    ])
+    assert records == [], records
+
+
+# ---------------------------------- §6 hold auto-scroll (touch north/south) —
+
+def test_touch_north_hold_auto_scrolls_one_down_notch_per_interval():
+    '''§6 "touch(north) hold → Auto-scroll up: wheel −1 notch per 100 ms
+    while held". The wheel delta is §6's own literal −1 (the row is written
+    as a wheel value, deliberately distinct from the §5 convention). The
+    first notch fires at the hold start, then one per the interval.'''
+    records = _run([
+        ('TOUCH north hold', 0),    # hold starts: notch #1 immediately
+        ('TICK', 95),
+        ('TICK', 100),              # first interval due exactly at 100 (>=)
+        ('TICK', 150),
+        ('TOUCH north hold', 190),  # repeat frame: no re-scroll, no re-press
+        ('TICK', 200),              # second interval at 200
+        # The hold ends (silence > TOUCH_RELEASE_MS: release at 390+).
+        ('TICK', 300),
+        ('TICK', 405),              # strictly past 190+200 → released;
+        ('TICK', 1000),             # no further notches ever
+    ])
+    assert records == [_wheel(-1), _wheel(-1), _wheel(-1), _wheel(-1)], records
+
+
+def test_touch_south_hold_auto_scrolls_one_up_notch_per_interval():
+    '''§6 "touch(south) hold → Auto-scroll down: wheel +1 notch per 100 ms
+    while held" — the opposite-signed twin of the north row. Repeat touch
+    frames keep the hold fresh past the release window.'''
+    records = _run([
+        ('TOUCH south hold', 0),    # hold starts: notch #1 immediately
+        ('TICK', 100),              # interval due exactly at 100 (>=)
+        ('TOUCH south hold', 105),  # repeat frame: refresh only
+        ('TICK', 205),              # next interval due; hold not stale
+        ('TOUCH south hold', 210),  # refresh again
+        ('TICK', 315),              # interval due again (315−205 ≥ 100)
+        ('TICK', 420),              # 420−210 = 210 > TOUCH_RELEASE_MS →
+                                    # the hold releases; no notch after it
+        ('TICK', 1000),
+    ])
+    assert records == [_wheel(1), _wheel(1), _wheel(1), _wheel(1)], records
+
+
+def test_hold_auto_scroll_stops_after_release_by_silence():
+    '''§6 "while held": the scrolling stops exactly with the hold's
+    inferred release — a notch that becomes due on the very tick the hold
+    is silence-released is suppressed (release is evaluated first), and
+    the hold can be re-acquired for a fresh scroll session.'''
+    records = _run([
+        ('TOUCH north hold', 0),    # notch 1
+        ('TICK', 205),              # > TOUCH_RELEASE_MS of silence → release;
+                                    # the interval-due notch is suppressed
+        ('TICK', 1000),             # nothing ever again
+    ])
+    assert records == [_wheel(-1)], records
+
+    released_then_reheld = _run([
+        ('TOUCH north hold', 0),    # notch 1
+        ('TICK', 100),              # notch 2 (interval due)
+        ('TICK', 205),              # > TOUCH_RELEASE_MS of silence → release
+        ('TOUCH north hold', 210),  # re-acquisition: fresh session
+        ('TICK', 310),              # its interval notch
+    ])
+    assert released_then_reheld == [
+        _wheel(-1), _wheel(-1), _wheel(-1), _wheel(-1),
+    ], released_then_reheld
+
+
+def test_hold_auto_scroll_needs_the_hold_row_zones_only():
+    '''The engine's §4 recency tracking does not scroll zones without a §6
+    hold auto-scroll row: center (button hold) and east/west (rowless)
+    produce no wheel output at any interval — center only shows its button
+    press and its own later silence-release.'''
+    records = _run([
+        ('TOUCH center hold', 0),
+        ('TOUCH east hold', 5),
+        ('TOUCH west hold', 10),
+        ('TICK', 115),              # any interval due: no scroll rows held
+        ('TICK', 215),              # center released by its own silence
+        ('TICK', 500),
+    ])
+    assert records == [
+        _button('left', 'down'),
+        _button('left', 'up'),
+    ], records
+
+
+def test_hold_auto_scroll_stops_on_lift_off():
+    '''§6 hold auto-scroll rides on §4 hold state, so the lift-off
+    explicit-release trigger (§4, AC-MAP-07) must end it: a notch that
+    becomes due on the very tick lift-off fires is suppressed (the
+    explicit trigger runs first), and only a re-engaged hold scrolls
+    again.'''
+    records = _run([
+        ('POSITION 500 1000', 0),   # tracking starts (silent baseline)
+        ('TOUCH north hold', 5),    # hold starts → immediate notch #1
+        ('TICK', 105),              # interval due (105−5 ≥ 100) AND lift-off
+                                    # fires (pos silent > LIFT_OFF_MS): both
+                                    # on this tick — release wins, silent
+        ('TICK', 205),              # due interval after lift-off: silent
+        ('TOUCH north hold', 210),  # can re-engage after the release
+        ('TICK', 310),              # its interval notch
+    ])
+    assert records == [_wheel(-1), _wheel(-1), _wheel(-1)], records
 
 
 # --------------------------------------------- airwheel (§5 / AC-MAP-04) ----
