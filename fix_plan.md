@@ -107,6 +107,11 @@ docker run -it --rm \
   version reports are valid only when `FwValid == 0xAA`; undefined status
   values now raise instead of printing garbage as a version string. 29
   pytest tests; `run_tests.sh` 4/4.
+  Update (2026-11-05, P3.7 commit): deviation D7 is closed for the Python
+  driver —GestureInfo is decoded as a full 32-bit word and gesture events
+  carry the class and edge-flick attributes (in-progress frames still emit
+  nothing); the keys_pending annotations narrowed to `cpp`, the ledger row
+  to Arduino only. 29 pytest tests; `run_tests.sh` 4/4.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -176,8 +181,7 @@ library both use). Python driver fixes go to `library/`.
 - [x] P3.5 → done, moved to the Done section below.
 - [x] P3.5b → done, moved to the Done section below.
 - [x] P3.6 → done, moved to the Done section below.
-- [ ] P3.7 Deviation D7 — carry gesture attributes (class bits 12–15, edge
-      flick bit 16, in-progress bit 31) into the decoded events.
+- [x] P3.7 → done, moved to the Done section below.
 
 ### 3c — Arduino driver defects (`arduino/Skywriter/skywriter.cpp`) — one per item
 
@@ -310,6 +314,35 @@ attribute table limit).
 
 ## Done
 
+- P3.7 — Deviation D7 closed for the **Python** driver (commit `deb1c0b`):
+  gesture attributes now travel with every gesture event, and the ledger row
+  narrows to the Arduino driver alone (fix item P3.11 closes it there).
+  `library/skywriter/__init__.py` now decodes the full 32-bit little-endian
+  GestureInfo word in `_handle_sensor_data` (Interface.pdf §4.5 Table 4-10)
+  and exposes the attributes as module state right before dispatching the
+  flick/garbage/circle callbacks, for handlers to read like the x/y/z
+  position values: `gesture` = code, bits 0–7 (this global existed before
+  but was never actually written — the dispatch loop's local of the same
+  name shadowed it; the loop variable is renamed), `gesture_class` =
+  bits 12–15 (0 none/garbage, 1 flick, 2 circle), `gesture_edge` =
+  bit 16 (the edge-flick flag). Recognition-in-progress frames
+  (bit 31, code 0) still emit nothing — already the code-0 behaviour and
+  hard-asserted by the `gesture_in_progress` scenario (spec §2 sentence
+  verified, no code change needed). Manifest: the keys_pending annotations
+  on the six gesture scenarios narrowed to `drivers: ["cpp"]`, which makes
+  the Python class/edge values hard assertions — verified: flicks carry
+  class 1 / edge false, garbage class 0, circles class 2, and the edge-flick
+  fixture F04 (word 03 10 01 00) carries edge **true**; F02's reserved bit
+  17 stays ignored. Harness: `tests/adapters_python.py` snapshots the three
+  globals onto every gesture record and resets them per replay;
+  `tests/canonical.py` emits code/class/edge from the records (the code
+  now comes from the driver's wire decode, not from the callback identity —
+  the FLICK_CODES/CIRCLE_CODES name→code maps became redundant and were
+  removed); `tests/test_harness.py`'s flick pin asserts the new record
+  shape. Wrong class/edge values fail the compare for either driver;
+  absence is tolerated historically only for `cpp` while D7 stands.
+  `bash run_tests.sh` green 4/4; 29 pytest tests (same count — the existing
+  assertions tightened, no test added).
 - P3.6 — Deviation D6 closed (commit `1164b91`): `_handle_firmware_info` in
   `library/skywriter/__init__.py` now treats **only** `FwValid == 0xAA` as a
   valid firmware-version report. Previously every status byte other than the
