@@ -13,6 +13,7 @@ by `bash run_tests.sh` (`python3 -m pytest -q tests/`).
 | `adapters.py` | The adapter contract (fresh state, per-frame feed, finish hook) and the registry. |
 | `adapters_python.py` | Wraps the Raspberry Pi driver (`library/skywriter/__init__.py`) with mocked hardware (same pattern as `library/test.py`); mirrors `_do_poll`'s ID dispatch and feeds the **payload** (frame minus 4-byte header) per the manifest convention. Its wall-clock `millis()` is redirected onto the VirtualClock. |
 | `adapters_cpp.py` + `cpp/` | Compiles the real Arduino driver (`arduino/Skywriter/skywriter.cpp`) for the host behind minimal `Arduino.h`/`Wire.h` shims, then drives its genuine `poll()` path once per fed frame. One process per scenario keeps decoder state fresh. Compiler resolution: `g++`/`c++` → `zig c++` (PATH) → `pip install --user --break-system-packages ziglang` fallback (the container has no system compiler and no sudo). |
+| `adapters_mapping.py` | The mapping-engine adapter (P3.12): chains the whole firmware signal chain in a second host binary — decoder shim → real driver → `SkywriterHIDMapper` (`pico-arduino/SkywriterHID`, the source the firmware links) → HID records. Driven by `TICK`/`FRAME`/`FIN` instructions on a ≤5 ms step timeline (the sensor's own frame cadence), so timed engine behaviour (report cadence, lift-off gating) runs exactly as on the loop hardware. One process per scenario keeps decoder + mapper state fresh. |
 | `runner.py` | Driver-agnostic replay runner: scenario → frames in order → fresh adapter state → records. |
 | `deviations.py` | Reads the "Known driver deviations" table from `specs/README.md` (the single source of truth) and answers "is `Dn` open, and for which driver?". |
 | `canonical.py` | The structured canonical sensor-event grammar (P3.2): native decoder records → canonical events; matching with the documented tolerances; per-scenario `omit_pending`/`keys_pending` deviation gating; cross-driver parity diffing. |
@@ -82,10 +83,13 @@ representation difference in the whole suite.
 
 `expect.hid` per scenario pins the expected controller output in the
 `tests/hid_grammar.py` grammar (mouse move/button/wheel/click, keyboard
-Page Up/Down, consumer media usages). Well-formedness is validated now; the
-replay-assertion of these records arms with the mapping-engine items
-P3.12–P3.15, which target exactly these scenarios — the manifest is their
-machine-readable acceptance data.
+Page Up/Down, consumer media usages). Well-formedness is validated for every
+scenario; the scenarios in `MAPPING_ENGINE_ARMED` (`tests/test_scenarios.py`)
+are additionally **replay-asserted end-to-end** against `SkywriterHIDMapper`
+through the mapping adapter — the pointer-model and always-silent scenarios
+armed with P3.12, and everything not yet armed is attributed to its opening
+fix item in `MAPPING_ENGINE_PENDING` (linted so every new scenario must be
+classified). P3.13–P3.15 open the remaining rows as they land.
 
 ## Scope note for the loop
 

@@ -19,11 +19,13 @@ Usage codes are the decimal USB HID usage IDs from hid_mapping.md §6:
 Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Increment 0x00E9=233,
 Volume Decrement 0x00EA=234; Page Up 0x4E=78, Page Down 0x4F=79.
 
-What this module verifies today is **well-formedness** (the migration to a
-machine-checkable format): every ``expect.hid`` list parses against the grammar
-above. Replay-asserting the records against a live mapping engine is armed by
-the mapping-engine items P3.12–P3.15, which target exactly these scenarios
-(the manifest is their machine-readable acceptance data).
+What this module verifies today is **well-formedness** (every ``expect.hid``
+list parses against the grammar above) — plus, since fix item P3.12, the
+scenarios listed in ``MAPPING_ENGINE_ARMED`` (``tests/test_scenarios.py``)
+are replay-asserted against the live mapping engine (``tests/adapters_mapping.py``);
+the remaining scenarios' replay assertions open with P3.13–P3.15, which
+target exactly the scenarios still pending (the manifest is their
+machine-readable acceptance data).
 '''
 
 MOUSE_ACTIONS = {

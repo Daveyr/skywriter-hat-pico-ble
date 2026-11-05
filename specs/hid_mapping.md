@@ -97,7 +97,12 @@ Let `pos` be the canonical 0–65535 position, x/y.
    it is reserved for a future "height sensitivity" feature.
 6. **Cadence:** position frames are coalesced into at most one mouse report per
    BLE connection interval; at most 200 reports/s. Deltas accumulate across
-   coalesced frames — never dropped.
+   coalesced frames — never dropped. The engine's cadence constant is
+   `REPORT_INTERVAL_MS` (initial: 15 ms — the slowest common BLE HID
+   connection interval, so the pointer rate never falls below the ≥ 60 Hz
+   floor of AC-BLE-04; the firmware may tighten it towards the live
+   connection interval, fix item P3.18, and the hardware loop tunes final
+   values per P4.5).
 
 ## 4. Touch semantics (buttons)
 
@@ -175,10 +180,14 @@ position), all are processed per §2. If gestures and touches arrive in the same
 
 The mapping table of §6 **is** the implementation: one static table mapping
 `(event kind, value)` → HID action, with tunables (`GAIN`, `JUMP_THRESHOLD`,
-`TOUCH_RELEASE_MS`, `TAP_CLICK_MS`, `AIRWHEEL_INVERT`, `AIRWHEEL_ENABLED`)
-as named constants in the same place. No second copy of the mapping may exist
-(any Python port consumes this same document). A future config channel (e.g.
-BLE characteristic) may expose the tunables; not required by this spec.
+`TOUCH_RELEASE_MS`, `TAP_CLICK_MS`, `AIRWHEEL_INVERT`, `AIRWHEEL_ENABLED`,
+`REPORT_INTERVAL_MS`, `LIFT_OFF_MS`) as named constants in the same place. No
+second copy of the mapping may exist (any Python port consumes this same
+document). The single implementation is the `SkywriterHID` mapping engine in
+`pico-arduino/SkywriterHID/src/` (pointer model live since P3.12; §4 touch,
+§5 AirWheel and the remaining §6 rows land with P3.13–P3.15). A future config
+channel (e.g. BLE characteristic) may expose the tunables; not required by
+this spec.
 
 ## 8. Acceptance criteria
 
@@ -186,7 +195,7 @@ Fixture names refer to `fixtures/manifest.json`.
 
 | ID | Criterion | Fixtures / method |
 |---|---|---|
-| AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work. | F01, F19 (jump), probe |
+| AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work; lift-off re-baselines; move reports coalesce to ≤ one per connection interval with deltas accumulated. | F01, F19 (jump), `pointer_move` (deltas + cadence), `pointer_lift_off_rebaseline` (lift-off), probe |
 | AC-MAP-02 | Touch press → button down on first frame; repeats don't re-trigger; release after `TOUCH_RELEASE_MS` without frames. | F07, F08 (sequence), F18 |
 | AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10 |
 | AC-MAP-04 | Airwheel emits 11.25°-quantized notches, signed correctly, and **survives counter wrap** (255→0 is +1 step, not −255). | F11–F15 (sequences) |

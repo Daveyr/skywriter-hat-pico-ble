@@ -131,6 +131,16 @@
       "file": "F23_touch_two_zones.hex",
       "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
       "desc": "Two touch electrodes set in one frame: Touch Center (bit 4) + Touch West (bit 1) — TouchInfo word 12 00 00 00. Exercises all-set-bits touch dispatch (§2; fix item P3.10 / deviation D4)."
+    },
+    "F24_position_move": {
+      "file": "F24_position_move.hex",
+      "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+      "desc": "Valid position x=3060 (+2560 from F01), y=488 (-512 from F01), z=200: a moderate movement well inside JUMP_THRESHOLD (8192). With GAIN 1/256 (hid_mapping.md §3 rule 2) this delta is +10 cursor units right (east) and -2 down (south)."
+    },
+    "F25_position_move_next": {
+      "file": "F25_position_move_next.hex",
+      "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+      "desc": "Valid position x=3316 (+256 from F24), y=488, z=200: exactly one GAIN-unit (1/256 of the field) more movement, for the pointer_move scenario's report-coalescing assertion (§3 rule 6: deltas accumulate across coalesced frames)."
     }
   },
   "scenarios": [
@@ -143,7 +153,7 @@
         ],
         "hid": []
       },
-      "note": "Decoder level: one position event. The USB-HID side must NOT move the cursor here: per hid_mapping.md §3 rule 4 the first valid position only sets the pointer baseline; a follow-up frame would emit the delta [AC-MAP-01]."
+      "note": "Decoder level: one position event. The HID side must NOT move the cursor here: per hid_mapping.md §3 rule 4 the first valid position only sets the pointer baseline; a follow-up frame would emit the delta. The pointer model is live since P3.12 — the mapping-engine adapter replays this end-to-end and hard-asserts the empty HID record in test_scenario_hid_expectation [AC-MAP-01]."
     },
     {
       "name": "position_jump_rebaseline",
@@ -155,7 +165,35 @@
         ],
         "hid": []
       },
-      "note": "F19's delta (+32268, +31768 raw) exceeds JUMP_THRESHOLD (8192), so the pointer model must discard the movement and re-baseline — pointer-model assertion (fix item P3.12); decode-level both positions are ordinary events."
+      "note": "F19's delta (+32268, +31768 raw) exceeds JUMP_THRESHOLD (8192), so the pointer model discards the movement and re-baselines — §3 rule 4, live since P3.12 (the mapping-engine adapter hard-asserts the empty HID record; replay of F19 = jump rejection + re-acquisition) [AC-MAP-01]."
+    },
+    {
+      "name": "pointer_move",
+      "frames": ["F01_position_only", "F24_position_move", "F25_position_move_next"],
+      "expect": {
+        "canonical": [
+          {"event": "position", "x": 500, "y": 1000, "z": 200},
+          {"event": "position", "x": 3060, "y": 488, "z": 200},
+          {"event": "position", "x": 3316, "y": 488, "z": 200}
+        ],
+        "hid": [
+          {"channel": "mouse", "action": "move", "dx": 11, "dy": -2}
+        ]
+      },
+      "note": "AC-MAP-01's movement half (P3.12): F01 only sets the pointer baseline (§3 rule 4). F24's delta (+2560, -512 raw) is normal tracking: at GAIN 1/256 it is +10 cursor units right (east) and -2 units down (-y = south) — the sign rule (§3 rule 3: +y north = up, no pre-flip). F25 adds exactly one more unit. Both movement frames land inside one report interval (REPORT_INTERVAL_MS = 15, initial per hid_mapping.md §3 rule 6), so their deltas are coalesced into ONE mouse report of (11, -2) — accumulated, never dropped [AC-MAP-01, AC-BLE-04's coalescing rule]."
+    },
+    {
+      "name": "pointer_lift_off_rebaseline",
+      "frames": ["F01_position_only", "F24_position_move"],
+      "time_gap_ms": 150,
+      "expect": {
+        "canonical": [
+          {"event": "position", "x": 500, "y": 1000, "z": 200},
+          {"event": "position", "x": 3060, "y": 488, "z": 200}
+        ],
+        "hid": []
+      },
+      "note": "Lift-off gating (§3 rule 5, P3.12): a 150 ms gap without valid position frames exceeds LIFT_OFF_MS (100 ms), so tracking pauses and F24's position becomes a fresh baseline instead of a 2560-raw jump — no cursor movement escapes the gap even though the raw delta would be a legal 10-unit step. The next valid position re-baselines per rule 4. Lift-off's button-release consequence (§4) lands with P3.13 [AC-MAP-07's baseline-reset half]."
     },
     {
       "name": "flick_west_east",

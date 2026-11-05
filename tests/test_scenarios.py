@@ -12,9 +12,12 @@ adapter) and checked against its machine-checkable expectations:
   reproduce (the annotated omission / attribute-drop really happens); a fix
   that lands without updating specs/README.md + the manifest fails here with
   instructions,
-- ``expect.hid`` — HID outcome records (``tests/hid_grammar.py`` grammar) are
-  validated for well-formedness now; their replay-assertion arms with the
-  mapping-engine items P3.12–P3.15,
+- ``expect.hid`` — HID outcome records (``tests/hid_grammar.py`` grammar):
+  well-formedness is validated for every scenario, and the scenarios in
+  ``MAPPING_ENGINE_ARMED`` are additionally replay-asserted against the
+  mapping engine end-to-end (P3.12 armed the pointer-model and
+  always-silent scenarios; P3.13–P3.15 open the rest — see
+  ``MAPPING_ENGINE_PENDING`` and the arm-coverage test below),
 - cross-driver parity — where both decoders emit an event, the canonical
   streams must agree (AC-MAP-09), except for event omissions attributable to
   a deviation annotated for exactly one driver (e.g. the D4 airwheel drop,
@@ -34,6 +37,51 @@ import pytest
 from tests import adapters, canonical, fixtures, hid_grammar, deviations, runner
 
 DRIVERS = ('python', 'cpp')
+
+# The mapping-engine arm (fix item P3.12): scenarios whose ``expect.hid``
+# records are *replay-asserted* against SkywriterHIDMapper through the
+# mapping adapter (the whole firmware signal chain: driver → canonical
+# events → mapper, one host binary). A scenario lands in
+# MAPPING_ENGINE_ARMED once the engine implements the behaviour its
+# records claim — the pointer-model scenarios arm here; the touch, AirWheel
+# and gesture scenarios open with P3.13–P3.15 (see MAPPING_ENGINE_PENDING).
+MAPPING_ENGINE_ARMED = frozenset({
+    # Pointer model (§3, P3.12): baseline-only first position, jump
+    # rejection, real movement with GAIN/sign, lift-off re-baseline.
+    'position_track',
+    'position_jump_rebaseline',
+    'pointer_move',
+    'pointer_lift_off_rebaseline',
+    # Events the §6 table (once filled) must map to nothing: garbage
+    # gesture rows and the control frames. The mapper accepts these kinds
+    # of events today and emits nothing yet — the assertions stop any row
+    # from sneaking out untested.
+    'gesture_in_progress',
+    'garbage_gesture',
+    'status_ack',
+    'fw_version_valid',
+})
+
+# Scenario name → fix item(s) whose engine rows open its HID replay
+# assertion. Linted to cover every manifest scenario not in ARMED.
+MAPPING_ENGINE_PENDING = {
+    # Touch semantics (§4, P3.13): presses, releases, taps/doubletaps.
+    'touch_press_and_release': ('P3.13',),
+    'touch_two_zones': ('P3.13',),
+    'tap_center': ('P3.13',),
+    'doubletap_center': ('P3.13',),
+    # AirWheel semantics (§5, P3.14): notches, sign, wrap.
+    'airwheel_quarter_turn_cw': ('P3.14',),
+    'airwheel_wrap': ('P3.14',),
+    # Needs both: the touch button half (P3.13) plus the wheel half (P3.14).
+    'touch_with_position_and_airwheel': ('P3.13', 'P3.14'),
+    # Gesture → media/consumer rows (§6, P3.15).
+    'flick_west_east': ('P3.15',),
+    'flick_east_west': ('P3.15',),
+    'edge_flick_east_west': ('P3.15',),
+    'circle_clockwise': ('P3.15',),
+    'circle_counter_clockwise': ('P3.15',),
+}
 
 
 @pytest.fixture(scope='session')
@@ -134,6 +182,61 @@ def test_manifest_is_structured_and_wellformed(manifest):
 def test_every_scenario_hid_outcome_records_are_wellformed(manifest):
     for scenario in manifest['scenarios']:
         hid_grammar.validate(scenario['expect']['hid'], scenario['name'])
+
+
+# ------------------------------------------------- mapping engine replay ---
+#
+# The mapping-engine adapter (tests/adapters_mapping.py) chains the real
+# C++ driver and SkywriterHIDMapper (pico-arduino/SkywriterHID — the same
+# source the firmware links) in one host binary, so the harness asserts the
+# §3–§6 behaviour end-to-end against the machine-checkable ``expect.hid``
+# records. Scenarios enter the arm only when the engine implements what
+# their records claim (see MAPPING_ENGINE_ARMED / MAPPING_ENGINE_PENDING
+# above) — never red-by-design.
+
+def test_mapping_engine_arm_covers_every_scenario(manifest):
+    '''Every scenario is either live in the HID replay arm or attributed to
+    the fix item(s) that open it. A newly added scenario without an entry
+    fails here with instructions.'''
+    for scenario in manifest['scenarios']:
+        name = scenario['name']
+        assert (name in MAPPING_ENGINE_ARMED
+                or name in MAPPING_ENGINE_PENDING), (
+            f'{name}: classified nowhere. When its HID records are '
+            f'implementable with the current engine, add it to '
+            f'MAPPING_ENGINE_ARMED; otherwise attribute it in '
+            f'MAPPING_ENGINE_PENDING to the fix item(s) that open it.')
+
+
+def test_mapping_engine_pending_attribution_is_current(manifest):
+    '''Attributed scenarios must still be non-armed (an armed scenario left
+    in the pending table would keep a stale item claim alive).'''
+    overlap = MAPPING_ENGINE_ARMED & frozenset(MAPPING_ENGINE_PENDING)
+    assert not overlap, (
+        f'scenarios both armed and pending-attributed: {sorted(overlap)}')
+
+
+@pytest.fixture(scope='session')
+def mapping_adapter():
+    # One shared instance: mapper state is per-process (fresh process per
+    # scenario) and the compiled binary is hash-cached on tests/build/.
+    return adapters.get_adapter('cpp_mapping')
+
+
+def test_scenario_hid_expectation_on_the_mapping_engine(
+        manifest, mapping_adapter):
+    for scenario in manifest['scenarios']:
+        name = scenario['name']
+        if name not in MAPPING_ENGINE_ARMED:
+            continue
+        expected = scenario['expect']['hid']
+        result = runner.replay(scenario, mapping_adapter)
+        hid_grammar.validate(result.records, name)
+        assert result.records == expected, (
+            f'{name}: mapping-engine HID output does not match '
+            f'expect.hid\nexpected: {expected!r}\nactual:   '
+            f'{result.records!r}\n(emission order matters — the mapper is '
+            f'a stream transformer)')
 
 
 # -------------------------------------------------- canonical expectations ---

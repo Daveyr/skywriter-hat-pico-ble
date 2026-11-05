@@ -53,11 +53,14 @@ class ReplayAdapter:
 
 
 def get_adapter(name):
-    '''Instantiate an adapter by key: 'python' or 'cpp'.'''
+    '''Instantiate an adapter by key: 'python', 'cpp' or 'cpp_mapping'.'''
     if name == 'python':
         from .adapters_python import PythonDriverAdapter
         return PythonDriverAdapter()
     if name == 'cpp':
         from .adapters_cpp import CppDecoderAdapter
         return CppDecoderAdapter()
+    if name == 'cpp_mapping':
+        from .adapters_mapping import MappingAdapter
+        return MappingAdapter()
     raise ValueError(f'unknown adapter: {name}')
