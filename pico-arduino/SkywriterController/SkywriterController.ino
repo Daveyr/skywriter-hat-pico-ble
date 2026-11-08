@@ -203,9 +203,11 @@ static void configure_sensor() {
     if (!sensor_send_runtime_command(commands[i])) {
       // The Python driver raises here; a headless controller denies boot
       // instead, loudly, so the serial probe (P4.1) sees exactly why.
-      Serial.print("SKYSTATE sensor_config_failed cmd_index=");
-      Serial.println(i);
-      for (;;) { delay(1000); }
+      for (;;) {
+        Serial.print("SKYSTATE sensor_config_failed cmd_index=");
+        Serial.println(i);
+        delay(1000);
+      }
     }
   }
   Serial.println("SKYSTATE sensor_ok");
@@ -756,6 +758,14 @@ void loop() {
     MouseBLE.move(0, 0, 0);
     Serial.println("SKYSTATE ble_resync battery=100 neutral_report");
     Serial.println("SKYSTATE ble_connected");
+  }
+
+  // Repeated while no host is connected, so a serial monitor opened after
+  // boot still sees the state (the boot lines are not replayed).
+  static unsigned long last_waiting_ms = 0;
+  if (!ble_link_open() && now - last_waiting_ms >= 5000) {
+    last_waiting_ms = now;
+    Serial.println("SKYSTATE waiting_for_host");
   }
 
   // Every polled sensor frame dispatches into the mapping engine... (the
