@@ -31,6 +31,8 @@ canonical events (this is the vocabulary used in `fixtures/manifest.json`):
 | `tap(zone)` | `TouchInfo` bits 5–9 | same zones |
 | `doubletap(zone)` | `TouchInfo` bits 10–14 | same zones |
 | `airwheel(degrees)` | `AirWheelInfo`, when `SystemInfo` AirWheelValid | signed rotation delta; +360 = one clockwise revolution |
+| `system_status(msg_id, error)` | `System_Status` (0x15) control frame | msg_id = the acknowledged control command (e.g. 0xA2 = 170); error = 16-bit little-endian error code, 0 = applied (Interface.pdf §3.6 Table 3-8). No HID output. |
+| `firmware_info(fw_valid, version)` | `Fw_Version_Info` (0x83) control frame | fw_valid = FwValid byte (only 0xAA = valid, §4.3 Table 4-6); version = NUL-stripped version string, only carried for a valid report (nothing is emitted for invalid). No HID output. |
 
 Payload offsets for the pinned mask `0x001F`: gesture word at payload 6, touch
 word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
@@ -49,14 +51,24 @@ word at 10, airwheel byte at 14, xyz at 16/18/20 (little-endian 16-bit).
   `d * 11.25`. A crossing of 255→0 is +1 step, not −255. (Side effect of
   signed 8-bit arithmetic: any per-frame change above 128 steps reads as
   counter-clockwise — physically implausible within one 5 ms frame, so
-  shortest-path is always correct.)
-  (Both current drivers get this wrong — deviation D3 in `specs/README.md`.)
+  shortest-path is always correct.) The **first AirWheel-valid frame after
+  driver start or after any stretch of AirWheel-invalid frames is a silent
+  baseline**: the counter is free-running, so it cannot be read against a
+  stale reference — that frame only records the reference and emits nothing.
+  (Fixed in both drivers 2026-11-05: the Python driver
+  `library/skywriter/__init__.py` and the Arduino driver
+  `arduino/Skywriter/skywriter.cpp` both implement the signed 8-bit
+  difference and the silent first-frame baseline.)
 - **Gesture in-progress frames** (`GestureInfo` bit 31 set, code 0) produce no
   event. Code 1 (garbage) produces a `gesture(1, …)` event which the mapping
   table maps to *nothing*.
 - **All set touch bits** in a frame produce their events; a frame may carry
-  touch + position + airwheel simultaneously and all must be processed
-  (deviation D4 shows the Arduino driver dropping fields after the first).
+  touch + position + airwheel simultaneously and all must be processed.
+  (Both drivers were fixed here 2026-11-05, fix item P3.10 / former deviation
+  D4: the Arduino driver used to `return` after the first touch bit — which
+  also skipped the AirWheel decode of the same frame — and the Python driver
+  used to `break` out of the touch loop after the first bit. Fixture
+  `touch_two_zones` / F23 hard-asserts a two-touch frame on both drivers.)
 - **Sensor sampling:** frames arrive every 5 ms while the hand is tracked
   (Interface.pdf §3.6.4).
 
@@ -85,7 +97,13 @@ Let `pos` be the canonical 0–65535 position, x/y.
    it is reserved for a future "height sensitivity" feature.
 6. **Cadence:** position frames are coalesced into at most one mouse report per
    BLE connection interval; at most 200 reports/s. Deltas accumulate across
-   coalesced frames — never dropped.
+   coalesced frames — never dropped. The engine's cadence constant is
+   `REPORT_INTERVAL_MS` (initial: 15 ms — the slowest common BLE HID
+   connection interval, so the pointer rate never falls below the ≥ 60 Hz
+   floor of AC-BLE-04) and is also a runtime property: the firmware
+   re-targets it at the LIVE connection interval its host negotiated
+   (HCI-tracked since P3.18, see `ble_hid.md` §7), and the hardware loop
+   tunes final values per P4.5.
 
 ## 4. Touch semantics (buttons)
 
@@ -163,10 +181,18 @@ position), all are processed per §2. If gestures and touches arrive in the same
 
 The mapping table of §6 **is** the implementation: one static table mapping
 `(event kind, value)` → HID action, with tunables (`GAIN`, `JUMP_THRESHOLD`,
-`TOUCH_RELEASE_MS`, `TAP_CLICK_MS`, `AIRWHEEL_INVERT`, `AIRWHEEL_ENABLED`)
-as named constants in the same place. No second copy of the mapping may exist
-(any Python port consumes this same document). A future config channel (e.g.
-BLE characteristic) may expose the tunables; not required by this spec.
+`TOUCH_RELEASE_MS`, `TAP_CLICK_MS`, `AIRWHEEL_INVERT`, `AIRWHEEL_ENABLED`,
+`REPORT_INTERVAL_MS`, `LIFT_OFF_MS`) as named constants in the same place. No
+second copy of the mapping may exist (any Python port consumes this same
+document). The single implementation is the `SkywriterHID` mapping engine in
+`pico-arduino/SkywriterHID/src/` — the full table is live there (pointer
+model since P3.12; the §4 touch semantics and §6 button rows since P3.13;
+the §5 AirWheel rows since P3.14; the remaining §6 rows — tap Page Up /
+Page Down, doubletap media track-skip, hold auto-scroll, the flick/circle
+consumer rows, and the deliberate garbage/reserved → nothing rows — since
+P3.15). A future config
+channel (e.g. BLE characteristic) may expose the tunables; not required by
+this spec.
 
 ## 8. Acceptance criteria
 
@@ -174,12 +200,12 @@ Fixture names refer to `fixtures/manifest.json`.
 
 | ID | Criterion | Fixtures / method |
 |---|---|---|
-| AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work. | F01, F19 (jump), probe |
+| AC-MAP-01 | Position frames produce relative movement with correct sign and magnitude; jump rejection and re-baseline work; lift-off re-baselines; move reports coalesce to ≤ one per connection interval with deltas accumulated. | F01, F19 (jump), `pointer_move` (deltas + cadence), `pointer_lift_off_rebaseline` (lift-off), probe |
 | AC-MAP-02 | Touch press → button down on first frame; repeats don't re-trigger; release after `TOUCH_RELEASE_MS` without frames. | F07, F08 (sequence), F18 |
-| AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10 |
+| AC-MAP-03 | Tap = 50 ms click; doubletap = two clicks; zone → button per §6. | F09, F10, F26–F29 (`tap_east`, `tap_west`, `tap_north`, `tap_south`), F30+F31 (`doubletap_east_west_reserved`) |
 | AC-MAP-04 | Airwheel emits 11.25°-quantized notches, signed correctly, and **survives counter wrap** (255→0 is +1 step, not −255). | F11–F15 (sequences) |
-| AC-MAP-05 | Gestures map per §6; garbage and in-progress frames emit nothing; edge-flick flag is carried in the canonical event. | F02–F06 |
+| AC-MAP-05 | Gestures map per §6; garbage and in-progress frames emit nothing; edge-flick flag is carried in the canonical event. | F02–F06, F32/F33 (`flick_south_north`, `flick_north_south`) |
 | AC-MAP-06 | A frame carrying touch + airwheel + position produces **all** corresponding outputs. | F18 |
 | AC-MAP-07 | Lift-off releases all buttons and resets the pointer baseline and airwheel accumulator. | probe + F07/F08 sequence (release by silence) |
-| AC-MAP-08 | Media/consumer actions appear on the consumer-control report; keyboard actions on the keyboard report; nothing is emitted on the wrong report. | `hw/ble_hid_probe.py` |
+| AC-MAP-08 | Media/consumer actions appear on the consumer-control report; keyboard actions on the keyboard report; nothing is emitted on the wrong report. | `hw/ble_hid_probe.py`; offline half replay-asserted in the corpus scenarios (`tap_north`/`tap_south` keyboard, `flick_*`/`circle_*` consumer, `doubletap_east_west_reserved` + `touch_*_hold_autoscroll` silence/wheel records) |
 | AC-MAP-09 | All AC-MAP-01…06 pass against the **Python** decoder and the **Arduino** decoder with identical canonical events (parity), modulo the deviations tracked in `specs/README.md` (which must be fixed to close this criterion). | fixture replay both drivers |

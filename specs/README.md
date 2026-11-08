@@ -83,17 +83,22 @@ These are implementation defects relative to the spec above. They are listed
 here so tests and the loop can be written against spec behaviour; each must be
 fixed in the drivers (Phase 2/3) and then removed from this table.
 
-| # | Driver | Deviation | Evidence |
-|---|---|---|---|
-| D1 | Python (`library/skywriter/__init__.py`) | `_do_poll` passes the **full 26-byte frame** (header included) to `_handle_sensor_data` / `_handle_firmware_info`, but those index **payload** offsets starting at 0 — everything is shifted by 4 bytes. Regression introduced when `data.pop(0)` header-stripping was removed (commit `e7e2399`). | `_do_poll` reads 26 B and dispatches `data`; `_handle_sensor_data` reads `d_configmask = data[0] | data[1] << 8` which is actually `size|flags`. |
-| D2 | Arduino (`arduino/Skywriter/skywriter.cpp`) | `setRuntimeParam` loops `i < 16` over 15-byte command arrays: one out-of-bounds byte is written to I2C after the 16-byte message. | `cmdAirWheel[]` et al. have 15 initializers; loop bound is 16. |
-| D3 | Python + Arduino | AirWheel delta ignores the 8-bit counter wrap: `(cur - last) / 32.0` must be a signed modulo-256 (8-bit) difference, `d = ((cur - last + 128) % 256) - 128`. Crossing 255→0 produces a large negative delta that is silently dropped (`|delta| < 0.5` guard). | Both `handle_sensor_data` implementations. |
-| D4 | Arduino | Touch decode reports only the highest set bit and `return`s from `handle_sensor_data`, skipping AirWheel decode for that frame. Spec requires processing every set bit and continuing to the remaining fields. | `skywriter.cpp` touch loop, `return` at the first match. |
-| D5 | Python | `garbage()` decorator registers `_on_garbage`, but the decoder never dispatches it (gesture code 1 is matched by the `gestures` list and falls through). | `_handle_sensor_data` gesture branch only handles `flick`. |
-| D6 | Python | `_handle_firmware_info` treats any `FwValid` other than `0x00`/`0x0A` as valid. Spec (Interface.pdf §4.3) defines `0xAA` = valid, `0x00` = empty, `0x0A` = invalid. | `__init__.py` `_handle_firmware_info`. |
-| D7 | Python + Arduino | Gesture attributes are discarded: gesture class (bits 12–15), edge-flick flag (bit 16), recognition-in-progress (bit 31). | Both decoders read only `GestureInfo` byte 0. |
-| D8 | `AGENTS.md` | Gotcha "`begin()` does not send `SW_SET_RUNTIME`" is stale — `begin()` now sends the four runtime-parameter commands (mirroring Python `setup()`). The `poll()` `INPUT` vs `INPUT_PULLUP` note is still valid. | `skywriter.cpp` `begin()`. |
+The table is **empty as of 2026-11-05 (fix item P3.19)** — every row recorded
+here has been resolved and removed. `tests/deviations.py` treats every
+remaining row as live and open, so a void row would poison the single source
+of truth; a row is removed in the same change that closes it (the D2/D8
+convention). Closure history for the documentation-only rows:
 
-Note on D1: the Python decoder's fixed offsets are correct **for the payload**;
-the fix is to strip (or slice past) the 4-byte header at dispatch, matching the
-Arduino driver and the vendor examples in `fixtures/`.
+- **D8 (closed 2026-11-05, P3.19)** — the row claimed the `AGENTS.md` gotcha
+  "`begin()` does not send `SW_SET_RUNTIME`" was stale. Truth-check against
+  the current tree found the opposite: the gotcha is **accurate** —
+  `arduino/Skywriter/skywriter.cpp`'s `begin()` sends no Set_Runtime_Parameter
+  (0xA2, the sensor-configuration command) traffic at all (only GPIO setup and
+  the reset pulse; sensor bring-up belongs to the `SkywriterController`
+  firmware, P3.16), and `poll()` still resets the transfer pin (TS) to plain
+  `INPUT` at the end of each transfer. The stale side was the ledger row
+  itself, so the fix is this removal plus keeping the gotcha correct in
+  `AGENTS.md` (its Python line references were re-checked and refreshed).
+  Like D2, no fixture annotation referenced D8, so nothing needed re-arming
+  (the `tests/deviations.py` realization checks are vacuously green with an
+  empty table).

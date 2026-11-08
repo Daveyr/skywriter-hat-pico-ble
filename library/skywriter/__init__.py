@@ -23,6 +23,14 @@ SW_RESET_PIN = 17
 SW_XFER_PIN = 27
 
 SW_HEADER_SIZE = 4
+# The Size field is a single byte counting the whole message INCLUDING this
+# 4-byte header, and the GestIC protocol caps a message at 255 bytes
+# (Interface.pdf §3.2) — so this is the upper bound of any size-aware read.
+SW_MAX_MESSAGE_SIZE = 255
+# The Raspberry Pi's Linux SMBus helper caps a single block read at 32 bytes
+# (kernel I2C_SMBUS_BLOCK_MAX), so a frame longer than that must be fetched
+# in chunked continuation reads.
+SW_I2C_READ_CHUNK = 32
 
 SW_DATA_DSP = 0b0000000000000001
 SW_DATA_GESTURE = 0b0000000000000010
@@ -47,12 +55,38 @@ x = 0.0
 y = 0.0
 z = 0.0
 rotation = 0.0
-_lastrotation = 0.0
+# AirWheel counter reference: None until the first frame with valid AirWheel
+# data establishes the baseline (the counter is free-running — see notes in
+# _handle_sensor_data).
+_lastrotation = None
 _round_to = 4
 _enable_auto_calibration = False
 _enable_events = True
 _debug = False
 gesture = 0
+# Attributes of the most recently recognized gesture, decoded from the
+# 32-bit GestureInfo word (Interface.pdf §4.5, Table 4-10). Handlers read
+# these alongside their own arguments, like x/y/z:
+#   gesture_class — gesture kind, GestureInfo bits 12–15
+#                   (0 none/garbage, 1 flick, 2 circle)
+#   gesture_edge  — edge-flick flag, GestureInfo bit 16
+gesture_class = 0
+gesture_edge = False
+
+# Last received control frames, decoded per Interface.pdf (the sensor's
+# datasheet): the System_Status acknowledge (§3.6 / Table 3-8) and the
+# Fw_Version_Info report (§4.3, Table 4-5/4-6). Handlers read these alongside
+# their own arguments, like x/y/z:
+#   system_status       — the control message that was acknowledged
+#                         (Set_Runtime_Parameter 0xA2 = 170, ...)
+#   system_status_error — the acknowledge's 16-bit error code (0 = applied)
+#   fw_valid            — FwValid status byte; only 0xAA is a valid library
+#   fw_version          — the NUL-stripped version string (only meaningful
+#                         for a valid report; empty otherwise)
+system_status = 0
+system_status_error = 0
+fw_valid = 0
+fw_version = ''
 
 io_error_count = 0
 
@@ -64,7 +98,15 @@ _on_touch = {}
 _on_touch_repeat = {}
 _on_touch_last = {}
 _on_garbage = None
-_on_circle = {}
+# Circle handler: single callable receiving the direction as a string
+# ('clockwise' or 'counter-clockwise'), like the flick/garbage registries.
+_on_circle = None
+# Optional control-frame handlers (fix item P3.11b): the parsed System_Status
+# acknowledge gets (msg_id, error); the valid Fw_Version_Info report gets the
+# NUL-stripped version string. Module state (system_status, system_status_error,
+# fw_valid, fw_version) carries the values alongside, like x/y/z.
+_on_system_status = None
+_on_firmware_version = None
 _is_setup = False
 
 
@@ -138,6 +180,7 @@ class AsyncWorker(StoppableThread):
 
 def _handle_sensor_data(data):
     global _lastrotation, rotation
+    global gesture, gesture_class, gesture_edge
 
     d_configmask = data[0] | data[1] << 8
     # d_timestamp = data[2] (200hz, 8-bit counter, max ~1.25sec)
@@ -162,7 +205,26 @@ def _handle_sensor_data(data):
 
     if d_configmask & SW_DATA_GESTURE and not d_gesture[0] == 0:
         # We have a gesture!
-        # is_edge = (d_gesture[3] & 0b00000001) > 0
+        #
+        # GestureInfo is a 32-bit little-endian word (Interface.pdf §4.5,
+        # Table 4-10): bits 0-7 = gesture code (0 none, 1 garbage, 2-5
+        # flicks, 6/7 circles), bits 12-15 = gesture class (1 flick,
+        # 2 circle), bit 16 = edge-flick flag, bit 31 = recognition in
+        # progress. A code of 0 -- which includes the sensor's
+        # "recognition in progress" frames (word 00 00 00 80 in the vendor
+        # trace) -- emits no event, exactly as hid_mapping.md §2 requires.
+        gesture_word = (d_gesture[0]
+                        | d_gesture[1] << 8
+                        | d_gesture[2] << 16
+                        | d_gesture[3] << 24)
+
+        # Carry the decoded attributes into the events: they become module
+        # state (like x/y/z) for the dispatched handler to read, and the
+        # replay harness snapshots them onto every gesture record.
+        gesture = gesture_word & 0xFF                 # bits 0-7: code
+        gesture_class = (gesture_word >> 12) & 0xF    # bits 12-15
+        gesture_edge = bool(gesture_word & 0x10000)   # bit 16
+
         gestures = [
             ('garbage', '', ''),
             ('flick', 'west', 'east'),
@@ -172,11 +234,17 @@ def _handle_sensor_data(data):
             ('circle', 'clockwise', ''),
             ('circle', 'counter-clockwise', '')
         ]
-        for i, gesture in enumerate(gestures):
+        for i, g in enumerate(gestures):
             if d_gesture[0] == i + 1:
 
-                if gesture[0] == 'flick' and callable(_on_flick):
-                    _on_flick(gesture[1], gesture[2])
+                if g[0] == 'garbage' and callable(_on_garbage):
+                    _on_garbage()
+
+                if g[0] == 'flick' and callable(_on_flick):
+                    _on_flick(g[1], g[2])
+
+                if g[0] == 'circle' and callable(_on_circle):
+                    _on_circle(g[1])
 
                 break
 
@@ -230,45 +298,80 @@ def _handle_sensor_data(data):
                         _on_touch_last[action[0]] = {}
                         handle_touch = True
 
-                    if 'all' not in _on_touch_last[action[0]].keys():
-                        _on_touch_last[action[0]]['all'] = None
+                    # The repeat limiter tracks the last firing PER ZONE: a
+                    # frame may carry several set electrodes at once (every
+                    # one dispatches — see the loop note), and two zones firing
+                    # in the same frame must not suppress each other through a
+                    # shared timestamp (P3.10; the shared 'all' slot was
+                    # harmless only while the loop dispatched at most one
+                    # action per frame).
+                    if action[1] not in _on_touch_last[action[0]].keys():
+                        _on_touch_last[action[0]][action[1]] = None
                         handle_touch = True
 
-                    elif (millis() - _on_touch_last[action[0]]['all']) >= 1000.0 / _on_touch_repeat[action[0]]['all']:
+                    elif (millis() - _on_touch_last[action[0]][action[1]]) >= 1000.0 / _on_touch_repeat[action[0]]['all']:
                         handle_touch = True
 
                     if callable(_on_touch[action[0]]['all']) and handle_touch:
                         _on_touch[action[0]]['all'](action[1])
-                        _on_touch_last[action[0]]['all'] = millis()
+                        _on_touch_last[action[0]][action[1]] = millis()
 
-                break
+                # No break: EVERY set touch bit dispatches (hid_mapping.md §2
+                # "all set touch bits in a frame produce their events"; the
+                # old `break` dropped every touch after the first — the
+                # Python half of deviation D4, fix item P3.10).
             comp = comp >> 1
 
     if d_configmask & SW_DATA_AIRWHEEL and d_sysinfo & 0b00000010:
         # Airwheel
-        delta = (d_airwheel[0] - _lastrotation) / 32.0
+        # The sensor counts rotation with a free-running 8-bit counter that
+        # wraps 255->0 (32 counts = one revolution, so 1 count = 11.25
+        # degrees). A hand re-entering the sensing field finds the counter
+        # at an arbitrary value, so the first valid frame after a gap in
+        # AirWheel-valid data only establishes the baseline and emits
+        # nothing.
+        if _lastrotation is None:
+            _lastrotation = d_airwheel[0]
+        else:
+            # Signed 8-bit difference: crossing 255->0 while counting
+            # clockwise is +1 step, not -255.
+            delta = ((d_airwheel[0] - _lastrotation + 128) % 256) - 128
+            degrees = delta * 11.25
 
-        # Delta is in degrees, with 1 = full 360 degree rotation
-        # Positive numbers equal clockwise delta, negative are counter-clockwise
+            # Delta is in degrees, with 32 counts = full 360 degree rotation
+            # Positive numbers equal clockwise delta, negative are counter-clockwise
+            if degrees != 0:
+                if callable(_on_airwheel):
+                    _on_airwheel(degrees)
 
-        if delta != 0 and delta > -0.5 and delta < 0.5:
-            if callable(_on_airwheel):
-                _on_airwheel(delta * 360.0)
+                rotation += degrees
 
-            rotation += delta
+                if rotation < 0:
+                    rotation = 0
 
-            if rotation < 0:
-                rotation = 0
+                if rotation > 1000:
+                    rotation = 1000
 
-            if rotation > 1000:
-                rotation = 1000
-
-        _lastrotation = d_airwheel[0]
+            _lastrotation = d_airwheel[0]
+    else:
+        # This frame carries no valid AirWheel data: the counter may have
+        # free-run meanwhile, so re-baseline on the next valid frame.
+        _lastrotation = None
 
 
 def _handle_status_info(data):
-    # error = data[7] << 8 | data[6]
-    pass
+    # System_Status (0x15) receive format (Interface.pdf §4.1; example in
+    # §3.6, Table 3-8): payload byte 0 = MsgID (the control message being
+    # acknowledged, e.g. Set_Runtime_Parameter 0xA2 = 170), byte 1 =
+    # MaxCmdSize (informational), bytes 2-3 = ErrorCode little-endian
+    # ("0" = the command was applied correctly).
+    global system_status, system_status_error
+
+    system_status = data[0]
+    system_status_error = data[3] << 8 | data[2]
+
+    if callable(_on_system_status):
+        _on_system_status(system_status, system_status_error)
 
 
 def _handle_firmware_info(data):
@@ -279,15 +382,66 @@ def _handle_firmware_info(data):
     # d_param_st = data[3]
     # d_loader_version = data[4:7]
     # d_fw_st = data[7]
-    d_fw_version = ''.join(map(chr, data[8:]))
 
-    print(d_fw_version)
+    global fw_valid, fw_version
 
-    if d_fw_valid == 0:
+    # The FwValid state travels with every report; the version string is
+    # only meaningful for a valid image (below). Fix item P3.11b: both are
+    # also surfaced as module state (like x/y/z) for handlers to read, and
+    # a registered `fw_version()` handler receives the NUL-stripped string.
+    fw_valid = d_fw_valid
+    fw_version = ''
+
+    # Interface.pdf §4.3 (Table 4-6) defines exactly three FwValid values:
+    # 0xAA = a valid GestIC Library is available, 0x00 = empty, 0x0A = an
+    # invalid library was stored or the last firmware update failed. Only an
+    # exact 0xAA counts as valid — any other value is undefined, and even a
+    # "0x00-like" spelling such as 0x0A must not be read as valid firmware.
+    if d_fw_valid == 0xAA:
+        # The version string is only meaningful for a valid image: with an
+        # empty or invalid library (or undefined values), those 120 bytes are
+        # not a version string at all. The field is NUL-padded, so strip at
+        # the first NUL (the canonical/decoder-level record carries exactly
+        # the readable string).
+        fw_version = ''.join(map(chr, data[8:])).split('\x00')[0]
+
+        print(fw_version)
+
+        if callable(_on_firmware_version):
+            _on_firmware_version(fw_version)
+
+    elif d_fw_valid == 0x00:
         raise Exception("No valid GestIC Library could be located")
 
-    if d_fw_valid == 0x0A:
+    elif d_fw_valid == 0x0A:
         raise Exception("An invalid GestiIC Library was stored, or the last update failed")
+
+    else:
+        raise Exception("Unknown GestIC Library status (FwValid 0x%02X)" % d_fw_valid)
+
+
+def _poll_i2c_error():
+    '''Shared I2C (Inter-Integrated Circuit) read-error handling (P3.11d).
+
+    The background polling thread (AsyncWorker) treats a ``False`` return from
+    ``_do_poll`` as "abort looping", so the old ``return False`` on an
+    ``IOError`` silently ended the whole poll thread on the FIRST bus error —
+    the config below (a grace of 10 consecutive errors, then raise) could
+    never be reached. The rule now: an I/O error is ONE bad poll cycle, so the
+    shared grace counter tracks consecutive failures and the function returns
+    True while the grace holds — the loop simply retries on the next tick.
+    Past the grace the exception raises: the thread dies with a VISIBLE
+    traceback (a persistently dead bus is a diagnosable hardware fault, not a
+    state to hide or race-wait a second shutdown path on) — callers stop the
+    worker cleanly themselves via ``stop()`` / ``_stop_poll()``.
+    '''
+    global io_error_count
+
+    io_error_count += 1
+    if io_error_count > 10:
+        raise Exception("Skywriter encountered more than 10 consecutive I2C IO errors!")
+
+    return True
 
 
 def _do_poll():
@@ -306,33 +460,78 @@ def _do_poll():
         GPIO.setup(SW_XFER_PIN, GPIO.OUT, initial=GPIO.LOW)
 
         try:
-            data = i2c.read_i2c_block_data(SW_ADDR, 0x00, 26)
-            io_error_count = 0
+            try:
+                data = i2c.read_i2c_block_data(SW_ADDR, 0x00, 26)
+                io_error_count = 0
 
-        except IOError:
-            io_error_count += 1
-            if io_error_count > 10:
-                raise Exception("Skywriter encoutered nore than 10 consecutive I2C IO errors!")
-            return False
+            except IOError:
+                return _poll_i2c_error()
 
-        # d_size = data[0]
-        # d_flags = data[1]
-        # d_seq = data[2]
-        d_ident = data[3]
+            # Size-aware frame reads (fix item P3.11c). The Size field (frame
+            # byte 0, Interface.pdf §3.3) counts the whole message INCLUDING
+            # this 4-byte header — e.g. 0x84 = 132 bytes for Fw_Version_Info
+            # (§3.5.1) — and the protocol recommends sizing the read from it
+            # (§2.3 note 1). The first read asks 26 bytes so the classic
+            # full-layout sensor frame stays a single read; a longer message is
+            # fetched with continuation reads while the transfer (TS) pin is
+            # still asserted, chunked at 32 bytes because of the SMBus cap
+            # above — a complete 132-byte frame therefore arrives as
+            # 26 + 32 + 32 + 32 + 10. The sensor is expected to continue its
+            # buffer across the reads of one asserted transfer; confirming that
+            # continuation on real hardware is recorded in fix item P4.1.
+            d_size = data[0]
 
-        if d_ident == 0x91:
-            _handle_sensor_data(data)
+            while 4 <= d_size <= SW_MAX_MESSAGE_SIZE and len(data) < d_size:
+                try:
+                    rest = i2c.read_i2c_block_data(
+                        SW_ADDR, 0x00, min(SW_I2C_READ_CHUNK, d_size - len(data)))
+                    io_error_count = 0
 
-        elif d_ident == 0x15:
-            _handle_status_info(data)
+                except IOError:
+                    return _poll_i2c_error()
 
-        elif d_ident == 0x83:
-            _handle_firmware_info(data)
+                if not rest:
+                    # The buffer gave nothing more: the frame cannot be
+                    # completed, so do not dispatch a half-read message.
+                    break
 
-        else:
-            pass
+                # Never keep more than the Size field promises: a continuation
+                # that answers beyond the message end (sensor padding, or a
+                # mocked bus over-answering the request count) must not spill
+                # into the payload dispatch below.
+                data += rest[:d_size - len(data)]
 
-        GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            # d_flags = data[1]
+            # d_seq = data[2]
+
+            # Dispatch only complete frames, and dispatch them WITHOUT their
+            # header: payload = the frame's Size-field byte range minus the
+            # 4-byte header (size, flags, sequence, message ID), so the handlers
+            # index payload offsets from 0 (the P3.3 off-by-four contract). A
+            # Size field under 4 can only be corrupt, and a read that could not
+            # be completed up to d_size is a partial frame: both are skipped for
+            # this poll cycle instead of being decoded half-read, but the
+            # transfer line is still released below.
+            if d_size >= 4 and len(data) >= d_size:
+                payload = data[SW_HEADER_SIZE:d_size]
+
+                d_ident = data[3]
+
+                if d_ident == 0x91:
+                    _handle_sensor_data(payload)
+
+                elif d_ident == 0x15:
+                    _handle_status_info(payload)
+
+                elif d_ident == 0x83:
+                    _handle_firmware_info(payload)
+
+        finally:
+            # Release the transfer line on EVERY exit path of the transfer —
+            # including an I2C error (the grace returns from within, the
+            # >10-exhaustion raises from within) — so the sensor's data
+            # buffers are always unlocked for the next cycle.
+            GPIO.setup(SW_XFER_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     return True
 
@@ -456,6 +655,26 @@ def garbage():
     return register
 
 
+def circle(*args, **kwargs):
+    '''Bind an action to the circle gestures
+
+    The handler receives the direction as a string:
+    'clockwise' or 'counter-clockwise'.
+
+    Note: the sensor only recognizes circles while its AirWheel feature is
+    disabled (a free-standing "grab and twist" recognition mode); the default
+    setup() enables AirWheel, so in that configuration no circle events arrive.
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_circle
+        _on_circle = handler
+
+    return register
+
+
 def move():
     '''Bind an action to move
 
@@ -485,6 +704,43 @@ def airwheel():
     def register(handler):
         global _on_airwheel
         _on_airwheel = handler
+
+    return register
+
+
+def system_status():
+    '''Bind an action to System_Status control messages (ID 0x15)
+
+    The handler receives the acknowledged control message's ID and its
+    16-bit error code: system_status(msg_id, error). msg_id is e.g.
+    Set_Runtime_Parameter (0xA2 = 170), and error 0 means the control
+    message was applied correctly (Interface.pdf §3.6 / Table 3-8).
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_system_status
+        _on_system_status = handler
+
+    return register
+
+
+def fw_version():
+    '''Bind an action to Fw_Version_Info control messages (ID 0x83)
+
+    The handler receives the version string — only delivered when the
+    sensor reports a valid GestIC library (FwValid 0xAA, Interface.pdf
+    §4.3 Table 4-6). The last report's FwValid byte and NUL-stripped
+    string are also available as the `fw_valid` / `fw_version` module
+    state, like x/y/z.
+    '''
+
+    setup()
+
+    def register(handler):
+        global _on_firmware_version
+        _on_firmware_version = handler
 
     return register
 

@@ -1,0 +1,150 @@
+'''Python-driver adapter for the replay harness (fix_plan P3.1).
+
+Wraps the Raspberry Pi driver in ``library/skywriter/__init__.py``. Hardware
+(RPi.GPIO, smbus) is mocked exactly like ``library/test.py`` so no real bus is
+touched; the background polling thread is never started because we bypass
+``setup()`` and register the capture handlers on the driver's (private) module
+globals directly — the same globals its public decorators write.
+
+Frame handling mirrors ``_do_poll()``'s dispatch: header ``ID`` decides which
+``_handle_*`` function receives the **payload** (frame minus the 4-byte
+header) — the same contract ``_do_poll`` implements since the D1 fix (P3.3).
+
+The driver's wall-clock ``millis()`` is pointed at the replay session's
+VirtualClock so touch repeat-limiting is simulated time, not real time.
+'''
+
+import sys
+from unittest import mock
+
+from .adapters import ReplayAdapter
+
+_LIBRARY_DIR = (
+    __import__('pathlib').Path(__file__).resolve().parents[1] / 'library'
+)
+
+_sky = None
+
+
+def import_skywriter():
+    '''Import library/skywriter with every hardware dependency mocked.
+
+    Mirrors the import in library/test.py: the parent ``RPi`` mock must carry
+    the same object as ``sys.modules['RPi.GPIO']`` (see the W5 note in
+    fix_plan.md) and the I2C bus ("SMBus") mock is created but unused because
+    the harness never calls ``setup()``.
+    '''
+    global _sky
+    if _sky is not None:
+        return _sky
+
+    gpio = mock.Mock()
+    gpio.RPI_REVISION = 3          # revision-3 board → the secondary bus
+    rpi = mock.Mock()
+    rpi.GPIO = gpio
+    sys.modules['RPi'] = rpi
+    sys.modules['RPi.GPIO'] = gpio
+    sys.modules['smbus'] = mock.Mock()
+
+    if _LIBRARY_DIR not in sys.path:  # pragma: no branch - idempotent
+        sys.path.insert(0, str(_LIBRARY_DIR))
+    import skywriter  # noqa: E402 - deliberately late, after the mocks
+    _sky = skywriter
+    return _sky
+
+
+class PythonDriverAdapter(ReplayAdapter):
+    name = 'python'
+
+    def begin(self, clock):
+        sky = import_skywriter()
+        self.sky = sky
+
+        # Fresh decoder state: every module-level variable the decoder reads
+        # or accumulates into, set to its pristine default.
+        sky.x = sky.y = sky.z = 0.0
+        sky.rotation = 0.0
+        sky._lastrotation = None
+        sky.gesture = 0
+        sky.gesture_class = 0
+        sky.gesture_edge = False
+        sky.system_status = 0
+        sky.system_status_error = 0
+        sky.fw_valid = 0
+        sky.fw_version = ''
+        sky.io_error_count = 0
+        sky._on_touch_last = {}
+
+        self.records = []
+        self._clock = clock
+
+        # Simulated time: the driver asks for wall-clock milliseconds when it
+        # rate-limits repeat touch callbacks; give it the virtual clock.
+        sky.millis = lambda: int(round(clock.now_ms))
+
+        # Capture handlers in the driver's own callback vocabulary. Gesture
+        # handlers snapshot the driver's attribute globals (gesture class
+        # and edge-flick flag, decoded from the GestureInfo word right
+        # before dispatch — deviation D7's Python half, closed with fix
+        # item P3.7; the Arduino driver decodes the same word since P3.11).
+        sky._on_move = lambda x, y, z: self.records.append(
+            {'kind': 'move', 'x': x, 'y': y, 'z': z})
+        sky._on_flick = lambda src, dst: self._gesture_record(
+            {'kind': 'flick', 'from': src, 'to': dst})
+        sky._on_garbage = lambda: self._gesture_record({'kind': 'garbage'})
+        sky._on_circle = lambda direction: self._gesture_record(
+            {'kind': 'circle', 'direction': direction})
+        sky._on_airwheel = lambda degrees: self.records.append(
+            {'kind': 'airwheel', 'degrees': degrees})
+
+        # Control frames (P3.11b): the System_Status handler gets the parsed
+        # (msg_id, error) directly; the Fw_Version_Info handler gets the
+        # NUL-stripped version string, with the FwValid byte snapshotted from
+        # the driver's `fw_valid` module state (set by
+        # `_handle_firmware_info` right before the valid-only dispatch — the
+        # same technique the gesture records use for class/edge).
+        sky._on_system_status = lambda msg_id, error: self.records.append(
+            {'kind': 'system_status', 'msg_id': msg_id, 'error': error})
+        sky._on_firmware_version = lambda version: self.records.append(
+            {'kind': 'firmware_info',
+             'fw_valid': self.sky.fw_valid, 'version': version})
+
+        sky._on_touch = {
+            kind: {'all': self._capture(kind)} for kind in ('touch', 'tap', 'doubletap')}
+        sky._on_touch_repeat = {
+            kind: {'all': 4} for kind in ('touch', 'tap', 'doubletap')}
+
+    def _capture(self, kind):
+        def handler(zone):
+            self.records.append({'kind': kind, 'zone': zone})
+        return handler
+
+    def _gesture_record(self, base):
+        '''Record one gesture event with its GestureInfo attributes.
+
+        The driver decodes the full GestureInfo word and exposes code
+        (bits 0-7), class (bits 12-15) and edge-flick flag (bit 16) as
+        module globals immediately before dispatching the flick /
+        garbage / circle callback, so snapshotting them here carries the
+        attributes into the canonical event's ``class``/``edge`` keys.
+        '''
+        base['code'] = self.sky.gesture
+        base['class'] = self.sky.gesture_class
+        base['edge'] = self.sky.gesture_edge
+        self.records.append(base)
+
+    def feed(self, frame, clock):
+        before = len(self.records)
+        payload = list(frame[4:])           # strip the 4-byte header
+        ident = frame[3]
+        if ident == self.sky.SW_SENSOR_DATA:
+            self.sky._handle_sensor_data(payload)
+        elif ident == self.sky.SW_SYSTEM_STATUS:
+            self.sky._handle_status_info(payload)
+        elif ident == self.sky.SW_FW_VERSION:
+            self.sky._handle_firmware_info(payload)
+        # other message IDs: ignore, like _do_poll's else-branch
+        return self.records[before:]
+
+    def finish(self, clock):
+        return []

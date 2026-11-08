@@ -1,261 +1,937 @@
 {
-  "schema": "skywriter-fixtures/v1",
-  "date": "2026-11-04",
-    "notes": [
-    "Expectations follow specs/hid_mapping.md §6. Python expectations assume the decoder receives the message payload (frame[4:]) — see deviation D1 in specs/README.md.",
-    "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
-    "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
-    "2026-11-04 revision: the AirWheel counter wrap is a signed 8-bit difference (wraps 255->0, 32 counts per revolution) — see specs/hid_mapping.md §2. F14 was re-authored from counter 0x1E to 0xFE; its '1e' filename label is stale (filenames are stable by rule) but the data value is 0xFE.",
-    "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout."
-  ],
-  "frames": {
-    "F01_position_only": {
-      "file": "F01_position_only.hex",
-      "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
-      "desc": "Valid position x=500, y=1000, z=200; DSPRunning|PositionValid."
-    },
-    "F02_flick_west_east": {
-      "file": "F02_flick_west_east.hex",
-      "source": "vendor-derived (Interface.pdf Table A-3, frame seq 0x4A, gesture word 02 10 02 00 — vendor field values repacked into our 26-byte mask-0x001F frame)",
-      "desc": "Flick West->East, gesture class 1 (flick). Bit 17 of GestureInfo is set (reserved) and must be ignored."
-    },
-    "F03_flick_east_west": {
-      "file": "F03_flick_east_west.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "Flick East->West, gesture class 1 (flick), clean word 03 10 00 00."
-    },
-    "F04_edge_flick_east_west": {
-      "file": "F04_edge_flick_east_west.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "Flick East->West with edge-flick flag (bit 16) set."
-    },
-    "F05_gesture_in_progress": {
-      "file": "F05_gesture_in_progress.hex",
-      "source": "vendor pattern (Interface.pdf Table A-3 'Gesture Recognizer started' rows use word 00 00 00 80)",
-      "desc": "Recognition in progress (bit 31), code 0: no gesture event."
-    },
-    "F06_garbage_gesture": {
-      "file": "F06_garbage_gesture.hex",
-      "source": "vendor pattern (Interface.pdf Table A-3 'Garbage recognized' row uses word 01 00 00 00)",
-      "desc": "Garbage model (code 1)."
-    },
-    "F07_touch_center": {
-      "file": "F07_touch_center.hex",
-      "source": "vendor-derived (Interface.pdf Table A-3 'Touch Center Electrode' frame, touch word 10 00 09 00 — repacked)",
-      "desc": "Touch Center (bit 4), touch counter 9 (approach 45 ms)."
-    },
-    "F08_touch_center_hold": {
-      "file": "F08_touch_center_hold.hex",
-      "source": "vendor-derived (Interface.pdf Table A-3 'Touch Counter Reset' frame, touch word 10 00 00 00 — repacked)",
-      "desc": "Touch Center still held, counter reset to 0."
-    },
-    "F09_tap_center": {
-      "file": "F09_tap_center.hex",
-      "source": "vendor-derived (Interface.pdf Table A-3 'Tap on Center electrode' frame, touch word 00 02 00 00 — repacked)",
-      "desc": "Tap Center (bit 9)."
-    },
-    "F10_doubletap_center": {
-      "file": "F10_doubletap_center.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "Double Tap Center (bit 14)."
-    },
-    "F11_airwheel_step00": {
-      "file": "F11_airwheel_step00.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 00, AirWheelValid set. Baseline frame."
-    },
-    "F12_airwheel_step08": {
-      "file": "F12_airwheel_step08.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 08: +8 steps (+90 deg) from F11."
-    },
-    "F13_airwheel_step10": {
-      "file": "F13_airwheel_step10.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 10 (hex): +8 steps (+90 deg) from F12."
-    },
-    "F14_airwheel_step1e": {
-      "file": "F14_airwheel_step1e.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 0xFE (254 dec): setup for wrap test. The '1e' filename label is stale from the superseded modulo-32 draft (value is 0xFE; filenames are stable by rule)."
-    },
-    "F15_airwheel_step02": {
-      "file": "F15_airwheel_step02.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "AirWheel counter 02 after 0xFE: +4 steps (+45 deg) across the 255->0 wrap."
-    },
-    "F16_status_ack_a2": {
-      "file": "F16_status_ack_a2.hex",
-      "source": "vendor (Interface.pdf Table 3-8, verbatim)",
-      "desc": "System_Status (0x15) ack to Set_Runtime_Parameter 0xA2, MaxCmdSize 0x34, ErrorCode 0x0000."
-    },
-    "F17_fw_version_valid": {
-      "file": "F17_fw_version_valid.hex",
-      "source": "synthetic (Interface.pdf Table 4-5 layout; version string transcribed from Example 3-1, NUL-padded to 120 bytes)",
-      "desc": "Fw_Version_Info (0x83), FwValid 0xAA (valid), version string '1.0.0;p:HillstarV01;...'."
-    },
-    "F18_touch_center_with_position": {
-      "file": "F18_touch_center_with_position.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "Combined frame: Touch Center (counter 9) + valid position + AirWheel counter 08. Exercises multi-field decode."
-    },
-    "F19_position_jump": {
-      "file": "F19_position_jump.hex",
-      "source": "synthetic (Interface.pdf Table 4-10)",
-      "desc": "Position jumps to x=32768, y=32768 (z=4096): exercises jump rejection / re-baseline after F01."
-    }
+ "schema": "skywriter-fixtures/v2",
+ "date": "2026-11-04",
+ "notes": [
+  "v2 (P3.2): expectations are machine-checkable. expect.canonical holds the event list in the tests/canonical.py grammar (the vocabulary of hid_mapping.md \u00a72); expect.hid holds the scenario's HID output as hid_grammar.py records. Prose remains only in frame desc/source and scenario note fields.",
+  "Canonical annotations on expectation entries: omit_pending {deviation, drivers} means those drivers may omit the event while that specs/README.md deviation row is open (the annotation must be dropped when the row is fixed); keys_pending {deviation, keys, drivers} means the named event keys may be absent from those drivers' records while the row is open.",
+  "Gesture class is the wire value of GestureInfo bits 12-15 (0 garbage, 1 flick, 2 circle); edge is GestureInfo bit 16. Consumer usages are decimal usage IDs: Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Inc 0x00E9=233, Volume Dec 0x00EA=234. Page Up 0x4E=78, Page Down 0x4F=79.",
+  "Python expectations assume the decoder receives the message payload (frame[4:]) \u2014 the harness feeds it that way, and the driver's _do_poll strips the 4-byte header at dispatch (P3.3). Positions in canonical form are raw 16-bit units; the Python decoders' \u00b14-unit rounding tolerance is documented in tests/canonical.py.",
+  "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
+  "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
+  "2026-11-04 revision: the AirWheel counter wrap is a signed 8-bit difference (wraps 255->0, 32 counts per revolution) \u2014 see specs/hid_mapping.md \u00a72. F14 was re-authored from counter 0x1E to 0xFE; its '1e' filename label is stale (filenames are stable by rule) but the data value is 0xFE.",
+  "2026-11-05 revision (P3.14a settled): the first AirWheel-valid frame after driver start or after any AirWheel-invalid stretch is a silent baseline (emits nothing) \u2014 the counter is free-running, so it cannot be read against a stale reference. F20 (counter 00) was added ahead of F18 in touch_with_position_and_airwheel to keep its +90 deg expectation under the settled rule.",
+  "2026-11-05 revision (P3.5b): circle gestures (wire codes 6/7) are now dispatched by the Python driver (circle(direction) decorator; deviation D10 closed). F21/F22 give the corpus its first AirWheel-disabled mask (bit 3 off, 0x0003): only fields up to GestureInfo are present, so the fixed offsets before it stay valid.",
+  "2026-11-05 revision (P3.7): the Python driver now decodes the full 32-bit GestureInfo word and carries gesture class (bits 12-15) and edge-flick flag (bit 16) onto every gesture event; the keys_pending annotations narrowed to 'cpp' until the Arduino driver gets the same decode (fix item P3.11, deviation D7). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
+  "2026-11-05 revision (P3.11): the Arduino driver decodes the full 32-bit GestureInfo word too, so every gesture expectation in this manifest is now a hard assertion on BOTH drivers (deviation D7 closed; the keys_pending annotations are gone). Recognition-in-progress frames (bit 31, code 0) still emit nothing on both drivers.",
+  "2026-11-05 revision (P3.11b): the control frames are surfaced as canonical events \u2014 System_Status (0x15) acks become {\"event\": \"system_status\", \"msg_id\": <acknowledged command id>, \"error\": <16-bit LE error code>} and valid Fw_Version_Info (0x83) reports become {\"event\": \"firmware_info\", \"fw_valid\": <FwValid byte>, \"version\": <NUL-stripped string>} (deviation D9 closed; the omit_pending annotations on status_ack / fw_version_valid are gone, so both events are hard-asserted on BOTH drivers). For the Arduino driver this also meant reading whole frames: poll() now requests SW_MAX_FRAME_SIZE (132) bytes so the 120-byte version field arrives complete (before, a 32-byte read truncated it).",
+  "2026-11-05 revision (P3.13): the mapping engine implements \u00a74 touch semantics and the \u00a76 button rows \u2014 touch(center) hold presses and later releases the left button (press-once, repeat-inert, release-by-silence per TOUCH_RELEASE_MS, lift-off releases all held buttons), tap(center/east/west) \u2192 left/right/middle click of TAP_CLICK_MS, doubletap(center) \u2192 double click; touch/tap/doubletap on the zones whose rows land with P3.15 (north/south keyboard taps, north/south hold auto-scroll, reserved doubletap east/west) emit nothing yet. touch_press_and_release's expect.hid is re-authored to the exact four records the rule produces for its 250 ms gap (see its note) and the four touch scenarios are replay-asserted on the mapping engine; sub-250 ms repeat timing is pinned by tests/test_mapper_unit.py because the Python driver rate-limits repeat touch callbacks by design (4 Hz default).",
+  "Provenance vocabulary: vendor = verbatim vendor bytes (F16 only); vendor-derived = vendor field values cited from Interface.pdf tables, repacked into our 26-byte frame; vendor pattern = vendor trace pattern with clean values; synthetic = constructed to the cited table layout.",
+  "2026-11-05 revision (P3.15b): the corpus's remaining §6-row gaps are filled with real replayed frames — tap(east/west/north/south) → right/middle click + Page Up/Down (F26–F29), the reserved doubletap(east/west) → nothing rows (F30/F31, hard-asserted as decoder events and pinned silent on the HID side), the vertical S→N/N→S volume flicks (F32/F33), and the north/south hold auto-scroll rows on real touch frames (F34/F35: hold-start notch + 100 ms cadence + stop-at-release, three records each). Every new scenario is replay-asserted on the mapping engine end-to-end (MAPPING_ENGINE_ARMED), covering the fixture side of AC-MAP-02/03/05/08 the ledger item P3.15b listed.",
+  "2026-11-05 revision (P3.15): the mapping engine implements the FULL \u00a76 table \u2014 the flick/circle gesture rows now dispatch consumer presses end-to-end (the five gesture scenarios are replay-asserted on the mapping engine), the tap(north/south) keyboard and doubletap(north/south) media rows and the \u00a76 hold auto-scroll (touch(north) \u2192 wheel \u22121 per 100 ms, touch(south) \u2192 +1) are live, and the deliberate no-output rows (garbage gesture, reserved doubletap(east/west)) are pinned silent (garbage_gesture replay-asserted silent; doubletap(east/west) pinned by tests/test_mapper_unit.py). The P3.13 note above is historical: north/south auto-scroll and keyboard taps are no longer silent. Auto-scroll's first notch emits at hold start (engine decision, see the fix_plan P3.15 Done entry), so a future north/south hold scenario must expect it."
+ ],
+ "frames": {
+  "F01_position_only": {
+   "file": "F01_position_only.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Valid position x=500, y=1000, z=200; DSPRunning|PositionValid."
   },
-  "scenarios": [
-    {
-      "name": "position_track",
-      "frames": ["F01_position_only"],
-      "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)"],
-        "arduino": "onXYZ(500, 1000, 200)",
-        "python": "move(0.0076, 0.0153, 0.0031)  # raw/65536 rounded to 4 dp; caveat: the legacy library emits every position, including the first — the new ports implement the §3 baseline and emit nothing here",
-        "hid": "no mouse movement: the first valid position only sets the pointer baseline (hid_mapping.md §3 rule 4); the next frame would emit a delta [AC-MAP-01]"
-      }
-    },
-    {
-      "name": "position_jump_rebaseline",
-      "frames": ["F01_position_only", "F19_position_jump"],
-      "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)", "position(x=32768, y=32768, z=4096)"],
-        "arduino": "onXYZ(500, 1000, 200); onXYZ(32768, 32768, 4096)",
-        "python": "move(0.0076, 0.0153, 0.0031); move(0.5, 0.5, 0.0625)",
-        "hid": "movement for F01 only; F19 delta (+32268, +31768) exceeds JUMP_THRESHOLD (8192) -> discarded and baseline reset to (32768, 32768) [AC-MAP-01]"
-      }
-    },
-    {
-      "name": "flick_west_east",
-      "frames": ["F02_flick_west_east"],
-      "expect": {
-        "canonical": ["gesture(code=2, class=flick, edge=false)"],
-        "arduino": "onGesture(2)  # SW_FLICK_WEST_EAST",
-        "python": "flick('west', 'east')",
-        "hid": "consumer report: Scan Next Track (0x00B5)"
-      }
-    },
-    {
-      "name": "flick_east_west",
-      "frames": ["F03_flick_east_west"],
-      "expect": {
-        "canonical": ["gesture(code=3, class=flick, edge=false)"],
-        "arduino": "onGesture(3)  # SW_FLICK_EAST_WEST",
-        "python": "flick('east', 'west')",
-        "hid": "consumer report: Scan Previous Track (0x00B6)"
-      }
-    },
-    {
-      "name": "edge_flick_east_west",
-      "frames": ["F04_edge_flick_east_west"],
-      "expect": {
-        "canonical": ["gesture(code=3, class=flick, edge=true)"],
-        "arduino": "onGesture(3)  # edge flag dropped today (D7)",
-        "python": "flick('east', 'west')  # edge flag dropped today (D7)",
-        "hid": "consumer report: Scan Previous Track (0x00B6)"
-      }
-    },
-    {
-      "name": "gesture_in_progress",
-      "frames": ["F05_gesture_in_progress"],
-      "expect": {
-        "canonical": [],
-        "arduino": "no callback (code 0)",
-        "python": "no callback (code 0)",
-        "hid": "nothing [AC-MAP-05]"
-      }
-    },
-    {
-      "name": "garbage_gesture",
-      "frames": ["F06_garbage_gesture"],
-      "expect": {
-        "canonical": ["gesture(code=1, class=garbage, edge=false)"],
-        "arduino": "onGesture(1)  # SW_GESTURE_GARBAGE",
-        "python": "_on_garbage NOT called today (D5); spec: garbage() handler fires",
-        "hid": "nothing [AC-MAP-05]"
-      }
-    },
-    {
-      "name": "touch_press_and_release",
-      "frames": ["F07_touch_center", "F08_touch_center_hold"],
-      "time_gap_ms": 250,
-      "expect": {
-        "canonical": ["touch(zone=center)", "touch(zone=center)"],
-        "arduino": "onTouch(10)  # SW_TOUCH_CENTER, once per frame (today also early-returns, D4)",
-        "python": "('touch','center') handler, subject to repeat_rate limiter (default 4/s)",
-        "hid": "left button down at F07; F08 is a repeat and must NOT re-trigger; left button release 250 ms after last touch frame (TOUCH_RELEASE_MS=200) [AC-MAP-02]"
-      }
-    },
-    {
-      "name": "tap_center",
-      "frames": ["F09_tap_center"],
-      "expect": {
-        "canonical": ["tap(zone=center)"],
-        "arduino": "onTouch(5)  # SW_TAP_CENTER",
-        "python": "('tap','center')",
-        "hid": "left click: button down for TAP_CLICK_MS (50 ms) then up [AC-MAP-03]"
-      }
-    },
-    {
-      "name": "doubletap_center",
-      "frames": ["F10_doubletap_center"],
-      "expect": {
-        "canonical": ["doubletap(zone=center)"],
-        "arduino": "onTouch(0)  # SW_DOUBLETAP_CENTER",
-        "python": "('doubletap','center')",
-        "hid": "double left click: two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]"
-      }
-    },
-    {
-      "name": "airwheel_quarter_turn_cw",
-      "frames": ["F11_airwheel_step00", "F12_airwheel_step08", "F13_airwheel_step10"],
-      "expect": {
-        "canonical": ["airwheel(+90 deg)", "airwheel(+90 deg)"],
-        "arduino": "onAirwheel(90); onAirwheel(90)",
-        "python": "airwheel(90.0); airwheel(90.0)",
-        "hid": "wheel up 8 notches, then 8 notches (11.25 deg per step) [AC-MAP-04]"
-      }
-    },
-    {
-      "name": "airwheel_wrap",
-      "frames": ["F14_airwheel_step1e", "F15_airwheel_step02"],
-      "expect": {
-        "canonical": ["airwheel(+45 deg)"],
-        "arduino": "onAirwheel(45)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
-        "python": "airwheel(45.0)  # today: reads as -7.875 revolutions (-2835 deg) and is silently dropped (D3)",
-        "hid": "wheel up 4 notches (4 steps x 11.25 deg). The 255->0 wrap must count as +4 steps, not -252 [AC-MAP-04]"
-      }
-    },
-    {
-      "name": "touch_with_position_and_airwheel",
-      "frames": ["F18_touch_center_with_position"],
-      "expect": {
-        "canonical": ["position(x=500, y=1000, z=200)", "touch(zone=center)", "airwheel(+90 deg)"],
-        "arduino": "onXYZ(500, 1000, 200); onTouch(10); airwheel SKIPPED today by early return (D4)",
-        "python": "move(0.0076, 0.0153, 0.0031); ('touch','center'); airwheel(90.0)",
-        "hid": "mouse delta + left button down + wheel up 8 notches, all from one frame [AC-MAP-06]"
-      }
-    },
-    {
-      "name": "status_ack",
-      "frames": ["F16_status_ack_a2"],
-      "expect": {
-        "canonical": ["system_status(msg_id=0xA2, error=0x0000)"],
-        "arduino": "setRuntimeParam() returns true",
-        "python": "get_status(0xA2) returns True",
-        "hid": "n/a (control message)"
-      }
-    },
-    {
-      "name": "fw_version_valid",
-      "frames": ["F17_fw_version_valid"],
-      "expect": {
-        "canonical": ["firmware_info(fw_valid=0xAA, version='1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00')"],
-        "arduino": "unimplemented (case 0x83 no-op today)",
-        "python": "no exception; version string printed (spec: FwValid must equal 0xAA to be valid, see D6)",
-        "hid": "n/a (control message)"
-      }
-    }
-  ]
+  "F02_flick_west_east": {
+   "file": "F02_flick_west_east.hex",
+   "source": "vendor-derived (Interface.pdf Table A-3, frame seq 0x4A, gesture word 02 10 02 00 \u2014 vendor field values repacked into our 26-byte mask-0x001F frame)",
+   "desc": "Flick West->East, gesture class 1 (flick). Bit 17 of GestureInfo is set (reserved) and must be ignored."
+  },
+  "F03_flick_east_west": {
+   "file": "F03_flick_east_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick East->West, gesture class 1 (flick), clean word 03 10 00 00."
+  },
+  "F04_edge_flick_east_west": {
+   "file": "F04_edge_flick_east_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick East->West with edge-flick flag (bit 16) set."
+  },
+  "F05_gesture_in_progress": {
+   "file": "F05_gesture_in_progress.hex",
+   "source": "vendor pattern (Interface.pdf Table A-3 'Gesture Recognizer started' rows use word 00 00 00 80)",
+   "desc": "Recognition in progress (bit 31), code 0: no gesture event."
+  },
+  "F06_garbage_gesture": {
+   "file": "F06_garbage_gesture.hex",
+   "source": "vendor pattern (Interface.pdf Table A-3 'Garbage recognized' row uses word 01 00 00 00)",
+   "desc": "Garbage model (code 1)."
+  },
+  "F07_touch_center": {
+   "file": "F07_touch_center.hex",
+   "source": "vendor-derived (Interface.pdf Table A-3 'Touch Center Electrode' frame, touch word 10 00 09 00 \u2014 repacked)",
+   "desc": "Touch Center (bit 4), touch counter 9 (approach 45 ms)."
+  },
+  "F08_touch_center_hold": {
+   "file": "F08_touch_center_hold.hex",
+   "source": "vendor-derived (Interface.pdf Table A-3 'Touch Counter Reset' frame, touch word 10 00 00 00 \u2014 repacked)",
+   "desc": "Touch Center still held, counter reset to 0."
+  },
+  "F09_tap_center": {
+   "file": "F09_tap_center.hex",
+   "source": "vendor-derived (Interface.pdf Table A-3 'Tap on Center electrode' frame, touch word 00 02 00 00 \u2014 repacked)",
+   "desc": "Tap Center (bit 9)."
+  },
+  "F10_doubletap_center": {
+   "file": "F10_doubletap_center.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Double Tap Center (bit 14)."
+  },
+  "F11_airwheel_step00": {
+   "file": "F11_airwheel_step00.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "AirWheel counter 00, AirWheelValid set. Baseline frame."
+  },
+  "F12_airwheel_step08": {
+   "file": "F12_airwheel_step08.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "AirWheel counter 08: +8 steps (+90 deg) from F11."
+  },
+  "F13_airwheel_step10": {
+   "file": "F13_airwheel_step10.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "AirWheel counter 10 (hex): +8 steps (+90 deg) from F12."
+  },
+  "F14_airwheel_step1e": {
+   "file": "F14_airwheel_step1e.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "AirWheel counter 0xFE (254 dec): setup for wrap test. The '1e' filename label is stale from the superseded modulo-32 draft (value is 0xFE; filenames are stable by rule)."
+  },
+  "F15_airwheel_step02": {
+   "file": "F15_airwheel_step02.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "AirWheel counter 02 after 0xFE: +4 steps (+45 deg) across the 255->0 wrap."
+  },
+  "F16_status_ack_a2": {
+   "file": "F16_status_ack_a2.hex",
+   "source": "vendor (Interface.pdf Table 3-8, verbatim)",
+   "desc": "System_Status (0x15) ack to Set_Runtime_Parameter 0xA2, MaxCmdSize 0x34, ErrorCode 0x0000."
+  },
+  "F17_fw_version_valid": {
+   "file": "F17_fw_version_valid.hex",
+   "source": "synthetic (Interface.pdf Table 4-5 layout; version string transcribed from Example 3-1, NUL-padded to 120 bytes)",
+   "desc": "Fw_Version_Info (0x83), FwValid 0xAA (valid), version string '1.0.0;p:HillstarV01;...'."
+  },
+  "F18_touch_center_with_position": {
+   "file": "F18_touch_center_with_position.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Combined frame: Touch Center (counter 9) + valid position + AirWheel counter 08. Exercises multi-field decode."
+  },
+  "F19_position_jump": {
+   "file": "F19_position_jump.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Position jumps to x=32768, y=32768 (z=4096): exercises jump rejection / re-baseline after F01."
+  },
+  "F20_airwheel_baseline00": {
+   "file": "F20_airwheel_baseline00.hex",
+   "source": "synthetic (Interface.pdf Table 4-10; counter value copied from F11)",
+   "desc": "AirWheel counter 00, AirWheelValid set. Re-baseline frame: feeds touch_with_position_and_airwheel so F18's counter 08 reads as +8 steps instead of a first-frame contradiction (P3.14a baseline decision)."
+  },
+  "F21_circle_cw": {
+   "file": "F21_circle_cw.hex",
+   "source": "vendor pattern (Interface.pdf Table A-3 'Clockwise Circle' trace rows, repacked; see the frame-layout note in fixtures/README.md)",
+   "desc": "Circle clockwise recognized: GestureInfo word 06 20 00 00 (code 6, class bits 12-15 = 2). DataOutputConfigMask 0x0003 (DSPStatus + GestureInfo only, AirWheel field absent) \u2014 the AirWheel-disabled configuration under which the sensor recognizes circles (\u00a76 Circle/AirWheel exclusivity). The Table A-3 trace itself shows code 0 ('Circle Gesture not recognized because AirWheel is On'); the recognized word is constructed from Table 4-10 GestureInfo bits."
+  },
+  "F22_circle_ccw": {
+   "file": "F22_circle_ccw.hex",
+   "source": "vendor pattern (Interface.pdf Table A-3 'Counter Clockwise Circle' trace rows, repacked; see the frame-layout note in fixtures/README.md)",
+   "desc": "Circle counter-clockwise recognized: GestureInfo word 07 20 00 00 (code 7, class bits 12-15 = 2). Same AirWheel-disabled mask 0x0003 as F21; recognized word constructed from Table 4-10 GestureInfo bits as above."
+  },
+  "F23_touch_two_zones": {
+   "file": "F23_touch_two_zones.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Two touch electrodes set in one frame: Touch Center (bit 4) + Touch West (bit 1) \u2014 TouchInfo word 12 00 00 00. Exercises all-set-bits touch dispatch (\u00a72; fix item P3.10 / deviation D4)."
+  },
+  "F24_position_move": {
+   "file": "F24_position_move.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Valid position x=3060 (+2560 from F01), y=488 (-512 from F01), z=200: a moderate movement well inside JUMP_THRESHOLD (8192). With GAIN 1/256 (hid_mapping.md \u00a73 rule 2) this delta is +10 cursor units right (east) and -2 down (south)."
+  },
+  "F25_position_move_next": {
+   "file": "F25_position_move_next.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Valid position x=3316 (+256 from F24), y=488, z=200: exactly one GAIN-unit (1/256 of the field) more movement, for the pointer_move scenario's report-coalescing assertion (\u00a73 rule 6: deltas accumulate across coalesced frames)."
+  },
+  "F26_tap_east": {
+   "file": "F26_tap_east.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap East (bit 8): the \u00a76 secondary-click row's sensor event. TouchInfo word 00 01 00 00."
+  },
+  "F27_tap_west": {
+   "file": "F27_tap_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap West (bit 6): the \u00a76 middle-click row's sensor event. TouchInfo word 40 00 00 00."
+  },
+  "F28_tap_north": {
+   "file": "F28_tap_north.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap North (bit 7): the \u00a76 keyboard Page Up row's sensor event. TouchInfo word 80 00 00 00."
+  },
+  "F29_tap_south": {
+   "file": "F29_tap_south.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Tap South (bit 5): the \u00a76 keyboard Page Down row's sensor event. TouchInfo word 20 00 00 00."
+  },
+  "F30_doubletap_east": {
+   "file": "F30_doubletap_east.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Double Tap East (bit 13): one of the \u00a76 reserved-to-nothing rows. TouchInfo word 00 20 00 00."
+  },
+  "F31_doubletap_west": {
+   "file": "F31_doubletap_west.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Double Tap West (bit 11): one of the \u00a76 reserved-to-nothing rows. TouchInfo word 00 08 00 00."
+  },
+  "F32_flick_south_north": {
+   "file": "F32_flick_south_north.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick South->North, gesture class 1 (flick), clean word 04 10 00 00: the \u00a76 Volume Increment row."
+  },
+  "F33_flick_north_south": {
+   "file": "F33_flick_north_south.hex",
+   "source": "synthetic (Interface.pdf Table 4-10)",
+   "desc": "Flick North->South, gesture class 1 (flick), clean word 05 10 00 00: the \u00a76 Volume Decrement row."
+  },
+  "F34_touch_north_hold": {
+   "file": "F34_touch_north_hold.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Touch North (bit 2, counter 9): the \u00a76 hold auto-scroll row's sensor event (touch word 04 00 09 00). The scenario advances a simulated hold to exercise the 100 ms cadence."
+  },
+  "F35_touch_south_hold": {
+   "file": "F35_touch_south_hold.hex",
+   "source": "synthetic (Interface.pdf Table 4-10 layout, mask 0x001F)",
+   "desc": "Touch South (bit 0, counter 9): the \u00a76 hold auto-scroll row's sensor event (touch word 01 00 09 00). The scenario advances a simulated hold to exercise the 100 ms cadence."
+  }
+ },
+ "scenarios": [
+  {
+   "name": "position_track",
+   "frames": [
+    "F01_position_only"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "position",
+      "x": 500,
+      "y": 1000,
+      "z": 200
+     }
+    ],
+    "hid": []
+   },
+   "note": "Decoder level: one position event. The HID side must NOT move the cursor here: per hid_mapping.md \u00a73 rule 4 the first valid position only sets the pointer baseline; a follow-up frame would emit the delta. The pointer model is live since P3.12 \u2014 the mapping-engine adapter replays this end-to-end and hard-asserts the empty HID record in test_scenario_hid_expectation [AC-MAP-01]."
+  },
+  {
+   "name": "position_jump_rebaseline",
+   "frames": [
+    "F01_position_only",
+    "F19_position_jump"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "position",
+      "x": 500,
+      "y": 1000,
+      "z": 200
+     },
+     {
+      "event": "position",
+      "x": 32768,
+      "y": 32768,
+      "z": 4096
+     }
+    ],
+    "hid": []
+   },
+   "note": "F19's delta (+32268, +31768 raw) exceeds JUMP_THRESHOLD (8192), so the pointer model discards the movement and re-baselines \u2014 \u00a73 rule 4, live since P3.12 (the mapping-engine adapter hard-asserts the empty HID record; replay of F19 = jump rejection + re-acquisition) [AC-MAP-01]."
+  },
+  {
+   "name": "pointer_move",
+   "frames": [
+    "F01_position_only",
+    "F24_position_move",
+    "F25_position_move_next"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "position",
+      "x": 500,
+      "y": 1000,
+      "z": 200
+     },
+     {
+      "event": "position",
+      "x": 3060,
+      "y": 488,
+      "z": 200
+     },
+     {
+      "event": "position",
+      "x": 3316,
+      "y": 488,
+      "z": 200
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "move",
+      "dx": 11,
+      "dy": -2
+     }
+    ]
+   },
+   "note": "AC-MAP-01's movement half (P3.12): F01 only sets the pointer baseline (\u00a73 rule 4). F24's delta (+2560, -512 raw) is normal tracking: at GAIN 1/256 it is +10 cursor units right (east) and -2 units down (-y = south) \u2014 the sign rule (\u00a73 rule 3: +y north = up, no pre-flip). F25 adds exactly one more unit. Both movement frames land inside one report interval (REPORT_INTERVAL_MS = 15, initial per hid_mapping.md \u00a73 rule 6), so their deltas are coalesced into ONE mouse report of (11, -2) \u2014 accumulated, never dropped [AC-MAP-01, AC-BLE-04's coalescing rule]."
+  },
+  {
+   "name": "pointer_lift_off_rebaseline",
+   "frames": [
+    "F01_position_only",
+    "F24_position_move"
+   ],
+   "time_gap_ms": 150,
+   "expect": {
+    "canonical": [
+     {
+      "event": "position",
+      "x": 500,
+      "y": 1000,
+      "z": 200
+     },
+     {
+      "event": "position",
+      "x": 3060,
+      "y": 488,
+      "z": 200
+     }
+    ],
+    "hid": []
+   },
+   "note": "Lift-off gating (\u00a73 rule 5, P3.12): a 150 ms gap without valid position frames exceeds LIFT_OFF_MS (100 ms), so tracking pauses and F24's position becomes a fresh baseline instead of a 2560-raw jump \u2014 no cursor movement escapes the gap even though the raw delta would be a legal 10-unit step. The next valid position re-baselines per rule 4. Lift-off's button-release consequence (\u00a74) lands with P3.13 [AC-MAP-07's baseline-reset half]."
+  },
+  {
+   "name": "flick_west_east",
+   "frames": [
+    "F02_flick_west_east"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 2,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 181
+     }
+    ]
+   },
+   "note": "GestureInfo bit 17 (reserved, set in F02) must stay ignored. Inserted into the structured manifest (P3.2) from the reviewed prose expectations."
+  },
+  {
+   "name": "flick_east_west",
+   "frames": [
+    "F03_flick_east_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 3,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 182
+     }
+    ]
+   }
+  },
+  {
+   "name": "edge_flick_east_west",
+   "frames": [
+    "F04_edge_flick_east_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 3,
+      "class": 1,
+      "edge": true
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 182
+     }
+    ]
+   },
+   "note": "The edge-flick flag (bit 16) must survive into the canonical event (\u00a72) even though the \u00a76 mapping treats it like any east-west flick."
+  },
+  {
+   "name": "gesture_in_progress",
+   "frames": [
+    "F05_gesture_in_progress"
+   ],
+   "expect": {
+    "canonical": [],
+    "hid": []
+   }
+  },
+  {
+   "name": "garbage_gesture",
+   "frames": [
+    "F06_garbage_gesture"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 1,
+      "class": 0,
+      "edge": false
+     }
+    ],
+    "hid": []
+   },
+   "note": "The gesture event itself is part of the decoder contract (\u00a72); the \u00a76 mapping table then maps garbage to nothing (which is why expect.hid is empty) [AC-MAP-05]."
+  },
+  {
+   "name": "circle_clockwise",
+   "frames": [
+    "F21_circle_cw"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 6,
+      "class": 2,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 233
+     }
+    ]
+   },
+   "note": "Circle clockwise (code 6) \u2192 Consumer Volume Increment per \u00a76. Dormant in the default profile: the sensor recognizes circles only with AirWheel disabled (\u00a76 Circle/AirWheel exclusivity), which is exactly the F21 frame's mask \u2014 this scenario exercises the decoder contract; the \u00a76 volume row arms with the mapping engine (P3.15) [AC-MAP-05]."
+  },
+  {
+   "name": "circle_counter_clockwise",
+   "frames": [
+    "F22_circle_ccw"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 7,
+      "class": 2,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 234
+     }
+    ]
+   },
+   "note": "Circle counter-clockwise (code 7) \u2192 Consumer Volume Decrement per \u00a76; same AirWheel-disabled exclusivity as circle_clockwise [AC-MAP-05]."
+  },
+  {
+   "name": "touch_press_and_release",
+   "frames": [
+    "F07_touch_center",
+    "F08_touch_center_hold"
+   ],
+   "time_gap_ms": 250,
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "center"
+     },
+     {
+      "event": "touch",
+      "zone": "center"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "down"
+     },
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "up"
+     },
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "down"
+     },
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "up"
+     }
+    ]
+   },
+   "note": "Left button presses on the first touch frame (\u00a74 press-once). Revision 2026-11-05 (P3.13): the engine evaluates the release rule (no touch frame for TOUCH_RELEASE_MS, 200 ms) on EVERY tick \u2014 with the scenario's simulated 250 ms gap, the held button therefore releases by silence at the tick 205 ms, F08's touch frame at 250 ms arrives after that release and presses again (a fresh acquisition, not a repeat; a repeat can only mean a touch frame inside the release window), and the post-scenario silence releases it again at 455 ms. The original prose expectation (one down/up pair, 'F08 must not re-press') contradicted the \u00a74 rule at this gap size \u2014 a build-mode correction of the machine-checkable expectation, not of the code. True repeat-inertness (a touch frame inside the release window never re-presses) cannot live in the corpus: the Python driver rate-limits repeat touch callbacks by design (default 4 Hz, one fire per 250 ms), so sub-250 ms touch frames would make the two decoders' canonical streams diverge undecoratably; it is pinned by the direct mapper unit tests in tests/test_mapper_unit.py instead [AC-MAP-02; release-inference, AC-MAP-07's button half]."
+  },
+  {
+   "name": "tap_center",
+   "frames": [
+    "F09_tap_center"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "center"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "left",
+      "count": 1,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "Tap-to-click: press + release of TAP_CLICK_MS (50 ms); never leaves a button held [AC-MAP-03]."
+  },
+  {
+   "name": "doubletap_center",
+   "frames": [
+    "F10_doubletap_center"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "doubletap",
+      "zone": "center"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "left",
+      "count": 2,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "Two 50 ms clicks separated by TAP_CLICK_MS [AC-MAP-03]."
+  },
+  {
+   "name": "touch_two_zones",
+   "frames": [
+    "F23_touch_two_zones"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "center"
+     },
+     {
+      "event": "touch",
+      "zone": "west"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "down"
+     }
+    ]
+   },
+   "note": "All set touch bits in one frame produce their events on BOTH drivers (hid_mapping.md \u00a72; D4 closed by P3.10 2026-11-05: the Arduino driver's early return and the Python driver's break after the first bit are gone). Scan order is highest bit first, so center (bit 4) precedes west (bit 1). HID side: touch(center) hold presses the left button; touch(west) hold has no \u00a76 row (only tap(west) maps to middle click), so nothing else \u2014 the button record arms with the mapping engine (P3.13)."
+  },
+  {
+   "name": "airwheel_quarter_turn_cw",
+   "frames": [
+    "F11_airwheel_step00",
+    "F12_airwheel_step08",
+    "F13_airwheel_step10"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "airwheel",
+      "degrees": 90
+     },
+     {
+      "event": "airwheel",
+      "degrees": 90
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 8
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 8
+     }
+    ]
+   },
+   "note": "F11 (counter 00) is the baseline frame and emits nothing; one sensor step = 11.25 deg = one wheel notch, so +8 steps = +90 deg = 8 notches up per event [AC-MAP-04]."
+  },
+  {
+   "name": "airwheel_wrap",
+   "frames": [
+    "F14_airwheel_step1e",
+    "F15_airwheel_step02"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "airwheel",
+      "degrees": 45
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 4
+     }
+    ]
+   },
+   "note": "F14 (0xFE) is the first airwheel frame of the scenario and acts as the silent baseline (settled airwheel-baseline rule: the first AirWheel-valid frame after a gap silently re-baselines); F15's 0x02 vs 0xFE signed-8-bit difference is +4 steps = +45 deg \u2014 the 255->0 wrap counts forward, not -252 steps [AC-MAP-04]. Fixed in both drivers 2026-11-05 (D3 closed: Python P3.4, Arduino P3.9); asserted on Python and C++ with no tolerance left."
+  },
+  {
+   "name": "touch_with_position_and_airwheel",
+   "frames": [
+    "F20_airwheel_baseline00",
+    "F18_touch_center_with_position"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "position",
+      "x": 500,
+      "y": 1000,
+      "z": 200
+     },
+     {
+      "event": "touch",
+      "zone": "center"
+     },
+     {
+      "event": "airwheel",
+      "degrees": 90,
+      "note": "F20 (counter 00) silently re-baselines the free-running counter, so F18's 0x08 is +8 steps = +90 deg [AC-MAP-04]. Hard-asserted on both drivers since D4 closed (P3.10, 2026-11-05): the touch decode no longer skips the AirWheel field."
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "button",
+      "button": "left",
+      "state": "down"
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 8
+     }
+    ]
+   },
+   "note": "All fields of one frame processed: button down + wheel up + decoded position [AC-MAP-06]. On the HID side F18 alone sets the pointer baseline (\u00a73 rule 4: no previous valid position) \u2014 no mouse movement is correct; the original prose 'mouse delta' is superseded by this structured record. F20 precedes F18 to give the airwheel counter a valid baseline (airwheel-baseline rule in hid_mapping.md \u00a72: the first AirWheel-valid frame after a gap is silent) \u2014 resolved by the P3.14a decision."
+  },
+  {
+   "name": "status_ack",
+   "frames": [
+    "F16_status_ack_a2"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "system_status",
+      "msg_id": 162,
+      "error": 0
+     }
+    ],
+    "hid": []
+   },
+   "note": "System_Status (0x15) reply: Set_Runtime_Parameter id 0xA2 = 162 (decimal) acknowledged with error 0x0000 (Interface.pdf \u00a74.1, Table 3-8: MsgID 0xA2, MaxCmdSize 0x34, ErrorCode little-endian). Revision 2026-11-05 (P3.11b): surfacing this as a hard assertion exposed a stale expectation value \u2014 msg_id was written as 170 (decimal for 0xAA, the FwValid byte) while the datasheet's decoded MsgID is 0xA2 = 162; corrected, it never ran before because the old omit_pending annotation skipped the event entirely. Surfaced as a canonical control event by both drivers 2026-11-05 (D9 closed, fix item P3.11b); control frames produce no HID output."
+  },
+  {
+   "name": "fw_version_valid",
+   "frames": [
+    "F17_fw_version_valid"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "firmware_info",
+      "fw_valid": 170,
+      "version": "1.0.0;p:HillstarV01;DSP:ID9000r1849;i:B;f:22500;nMsg;s:Beta2r1040:1049:MO;c:MKI;t:2013/11/08 13:03:00"
+     }
+    ],
+    "hid": []
+   },
+   "note": "Fw_Version_Info (0x83), FwValid 0xAA (valid; validity rules per Interface.pdf \u00a74.3 \u2014 the Python driver's acceptance values were fixed 2026-11-05, P3.6, pinned in tests/test_firmware_info.py), version string NUL-stripped. Surfaced as a canonical control event by both drivers 2026-11-05 (D9 closed, fix item P3.11b). Control frames produce no HID output."
+  },
+  {
+   "name": "tap_east",
+   "frames": [
+    "F26_tap_east"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "east"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "right",
+      "count": 1,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(east) \u2192 Right click\": one 50 ms click, never leaving a button held (fixture-corpus gap fill, P3.15b) [AC-MAP-03]. Replay-asserted end-to-end on the mapping engine with the rest of the corpus scenarios (P3.15b)."
+  },
+  {
+   "name": "tap_west",
+   "frames": [
+    "F27_tap_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "west"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "click",
+      "button": "middle",
+      "count": 1,
+      "click_ms": 50
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(west) \u2192 Middle click\": the tertiary-click row (fixture-corpus gap fill, P3.15b) [AC-MAP-03]."
+  },
+  {
+   "name": "tap_north",
+   "frames": [
+    "F28_tap_north"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "north"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "keyboard",
+      "action": "press",
+      "key": "page_up",
+      "usage": 78
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(north) \u2192 Keyboard Page Up\": the action goes on the KEYBOARD report, not the mouse report \u2014 nothing is emitted on a wrong channel (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+  },
+  {
+   "name": "tap_south",
+   "frames": [
+    "F29_tap_south"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "tap",
+      "zone": "south"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "keyboard",
+      "action": "press",
+      "key": "page_down",
+      "usage": 79
+     }
+    ]
+   },
+   "note": "\u00a76 \"tap(south) \u2192 Keyboard Page Down\": the Page Up row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+  },
+  {
+   "name": "doubletap_east_west_reserved",
+   "frames": [
+    "F30_doubletap_east",
+    "F31_doubletap_west"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "doubletap",
+      "zone": "east"
+     },
+     {
+      "event": "doubletap",
+      "zone": "west"
+     }
+    ],
+    "hid": []
+   },
+   "note": "\u00a76 \"doubletap(east) / doubletap(west) \u2192 nothing (reserved)\": the decoder contract still produces both events (hard-asserted on both drivers \u2014 different zones, so the Python driver's per-zone touch repeat limiter cannot suppress the second frame), and the mapping table deliberately maps both to nothing \u2014 expect.hid pins that silence on the HID side (fixture-corpus gap fill, P3.15b; also pinned at mapper-call granularity in tests/test_mapper_unit.py since P3.15 so a remap to a real action cannot sneak in untested) [AC-MAP-08's nothing-on-the-wrong-report half]."
+  },
+  {
+   "name": "flick_south_north",
+   "frames": [
+    "F32_flick_south_north"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 4,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 233
+     }
+    ]
+   },
+   "note": "\u00a76 \"gesture(4 \u2026 flick S\u2192N) \u2192 Consumer Volume Increment\": the vertical flick the corpus lacked (fixture-corpus gap fill, P3.15b) [AC-MAP-05, AC-MAP-08]."
+  },
+  {
+   "name": "flick_north_south",
+   "frames": [
+    "F33_flick_north_south"
+   ],
+   "expect": {
+    "canonical": [
+     {
+      "event": "gesture",
+      "code": 5,
+      "class": 1,
+      "edge": false
+     }
+    ],
+    "hid": [
+     {
+      "channel": "consumer",
+      "action": "press",
+      "usage": 234
+     }
+    ]
+   },
+   "note": "\u00a76 \"gesture(5 \u2026 flick N\u2192S) \u2192 Consumer Volume Decrement\": the Volume Increment row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-05, AC-MAP-08]."
+  },
+  {
+   "name": "touch_north_hold_autoscroll",
+   "frames": [
+    "F34_touch_north_hold"
+   ],
+   "time_gap_ms": 350,
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "north"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": -1
+     }
+    ]
+   },
+   "note": "\u00a76 \"touch(north) hold \u2192 Auto-scroll up: wheel \u22121 notch per 100 ms while held\", on a real replayed touch frame (fixture-corpus gap fill, P3.15b). After the hold-start frame (t=0) the replay advances 350 ms of simulated silence on the 5 ms tick grid: the first \u22121 notch is the hold-start emission, further ones fire at t=100 and t=200 (the 200 ms tick still counts as held \u2014 TOUCH_RELEASE_MS is compared strictly, so t=200 is not yet a release); the hold releases by silence strictly past 200 ms (t=205) and no further notch ever appears, so exactly three records. Wheel deltas are emitted immediately, un-coalesced (\u00a75's latency principle) [AC-MAP-08; cadence semantics also pinned at mapper-call granularity in tests/test_mapper_unit.py]."
+  },
+  {
+   "name": "touch_south_hold_autoscroll",
+   "frames": [
+    "F35_touch_south_hold"
+   ],
+   "time_gap_ms": 350,
+   "expect": {
+    "canonical": [
+     {
+      "event": "touch",
+      "zone": "south"
+     }
+    ],
+    "hid": [
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     },
+     {
+      "channel": "mouse",
+      "action": "wheel",
+      "notches": 1
+     }
+    ]
+   },
+   "note": "\u00a76 \"touch(south) hold \u2192 Auto-scroll down: wheel +1 notch per 100 ms while held\": the north row's opposite-signed twin, same 0/100/200 ms notch timing with the release strictly past 200 ms \u2014 exactly three records (fixture-corpus gap fill, P3.15b) [AC-MAP-08]."
+  }
+ ]
 }

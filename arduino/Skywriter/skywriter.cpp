@@ -21,7 +21,14 @@ void _SkyWriter::poll(){
     pinMode(this->xfer, OUTPUT);
     digitalWrite(this->xfer, LOW);
     
-    Wire.requestFrom(this->addr, (unsigned char)32);
+    // One read request sized for the longest sensor message
+    // (Fw_Version_Info, SW_MAX_FRAME_SIZE bytes): a whole frame must be
+    // captured in this single read, so control frames like the firmware
+    // version string arrive complete. Shorter frames simply return fewer
+    // bytes. Before P3.11b this read only 32 bytes, which cut the 120-byte
+    // version field of an Fw_Version_Info frame to its first ~20
+    // characters.
+    Wire.requestFrom(this->addr, (unsigned char)SW_MAX_FRAME_SIZE);
     
     unsigned char d_size,d_flags,d_seq,d_ident;
     
@@ -37,8 +44,12 @@ void _SkyWriter::poll(){
     
     this->command_buffer[0] = '\0';
     
+    // Copy the remaining frame bytes. Bounded by the buffer size: never
+    // write past the terminator index (the former unbounded loop relied on
+    // the old 32-byte request exactly filling a 32-byte buffer — a hazard
+    // that must not return with the larger request).
     unsigned char i = 0;
-    while(Wire.available()){
+    while(Wire.available() && i < (SW_MAX_FRAME_SIZE - SW_HEADER_SIZE)){
       this->command_buffer[i] = Wire.read();
       i++;
     }
@@ -49,10 +60,12 @@ void _SkyWriter::poll(){
         this->handle_sensor_data(this->command_buffer);
         break;
       case 0x15:
-        // Status info - Unimplemented
+        // System_Status acknowledge, decoded as a control event (P3.11b).
+        this->handle_status_info(this->command_buffer);
         break;
       case 0x83:
-        // Firmware data - Unimplemented
+        // Fw_Version_Info report, decoded as a control event (P3.11b).
+        this->handle_firmware_info(this->command_buffer);
         break;
     }
     
@@ -63,9 +76,51 @@ void _SkyWriter::poll(){
 }
 
 void _SkyWriter::onTouch(    void (*function)(unsigned char) ){this->handle_touch    = function;}
-void _SkyWriter::onAirwheel( void (*function)(int)           ){this->handle_airwheel = function;}
+void _SkyWriter::onAirwheel( void (*function)(float)          ){this->handle_airwheel = function;}
 void _SkyWriter::onGesture(  void (*function)(unsigned char) ){this->handle_gesture  = function;}
 void _SkyWriter::onXYZ(      void (*function)(unsigned int,unsigned int,unsigned int) ){this->handle_xyz  = function;}
+void _SkyWriter::onSystemStatus( void (*function)(unsigned char, unsigned int) ){this->handle_system_status = function;}
+void _SkyWriter::onFirmwareVersion( void (*function)(unsigned char, const char*) ){this->handle_firmware_version = function;}
+
+void _SkyWriter::handle_status_info(unsigned char* data){
+  // System_Status (0x15) — Interface.pdf §4.1, example in §3.6 Table 3-8:
+  // payload byte 0 = MsgID acknowledged (e.g. Set_Runtime_Parameter 0xA2 =
+  // 170), byte 1 = MaxCmdSize (informational), bytes 2-3 = ErrorCode
+  // little-endian ("0" = the message was applied correctly). Mirrors the
+  // Python driver's `_handle_status_info`.
+  if( this->handle_system_status == NULL ) return;
+
+  this->handle_system_status(
+    data[SW_PAYLOAD_SYSTEM_STATUS_ID],
+    (unsigned int)( data[SW_PAYLOAD_SYSTEM_STATUS_ERROR + 1] << 8
+                  | data[SW_PAYLOAD_SYSTEM_STATUS_ERROR] )
+  );
+}
+
+void _SkyWriter::handle_firmware_info(unsigned char* data){
+  // Fw_Version_Info (0x83) — Interface.pdf §4.3, Table 4-5/4-6: payload
+  // byte 0 = FwValid; only an exact 0xAA is a valid GestIC Library (the
+  // D6 rule; the Python driver raises for every other value and emits no
+  // event, so emitting only here keeps both drivers' event streams in
+  // parity). The FwVersion field is payload bytes 8..127, ASCII,
+  // NUL-padded; the callback receives it NUL-stripped, exactly what the
+  // canonical-record grammar expects.
+  if( data[SW_PAYLOAD_FW_INFO_VALID] != 0xAA ) return;
+
+  char version[SW_FW_VERSION_FIELD_SIZE + 1];
+  unsigned char j;
+  // Copy until the field's own length, stopping either at the NUL padding
+  // or at the receive-buffer terminator (where the frame ended).
+  for( j = 0; j < SW_FW_VERSION_FIELD_SIZE
+              && data[SW_PAYLOAD_FW_INFO_VERSION + j] != 0; j++ ){
+    version[j] = (char)data[SW_PAYLOAD_FW_INFO_VERSION + j];
+  }
+  version[j] = '\0';
+
+  if( this->handle_firmware_version == NULL ) return;
+
+  this->handle_firmware_version(data[SW_PAYLOAD_FW_INFO_VALID], version);
+}
 
 void _SkyWriter::handle_sensor_data(unsigned char* data){
 /*
@@ -115,12 +170,48 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
       
       if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_GESTURE && data[SW_PAYLOAD_GESTURE] > 0){
         // Valid gesture
-        this->last_gesture = data[SW_PAYLOAD_GESTURE];
+        //
+        // GestureInfo is a 32-bit little-endian word (Interface.pdf §4.5,
+        // Table 4-10): bits 0-7 = gesture code (1 garbage, 2-5 flicks, 6/7
+        // circles), bits 12-15 = gesture class (1 flick, 2 circle), bit 16
+        // = edge-flick flag, bit 31 = recognition in progress. Recognition
+        // in progress ("hand moving, gesture not yet decided") frames carry
+        // code 0, so the code>0 test above already emits nothing for them,
+        // exactly as hid_mapping.md §2 requires — that part of the branch
+        // is unchanged.
+        // Deviation D7 (fix item P3.11): the old code read only byte 0 and
+        // discarded class/edge; this decode now mirrors the Python driver's
+        // reference implementation (library/skywriter/__init__.py, P3.7).
+        uint32_t gesture_word =
+              (uint32_t)data[SW_PAYLOAD_GESTURE]
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 1] << 8
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 2] << 16
+            | (uint32_t)data[SW_PAYLOAD_GESTURE + 3] << 24;
+
+        // The attributes become driver state (like x/y/z), mirroring the
+        // Python driver's `gesture` / `gesture_class` / `gesture_edge`
+        // globals, so a registered handler reads them alongside
+        // `last_gesture`. They are set BEFORE the dispatch, so the handler
+        // and the replay harness (tests/cpp/host_decoder_main.cpp prints
+        // them from inside its onGesture callback) always see the values of
+        // the gesture being dispatched.
+        this->last_gesture       = gesture_word & 0xFF;          // bits 0-7: code
+        this->last_gesture_class = (gesture_word >> 12) & 0xF;   // bits 12-15: class
+        this->last_gesture_edge  = gesture_word & 0x10000;       // bit 16: edge flick
+
         if( this->handle_gesture != NULL ) this->handle_gesture(this->last_gesture);
       }
       
       if ( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_TOUCH ){
-        // Valid touch
+        // Valid touch. TouchInfo bits 0-14 are the touch / tap / doubletap
+        // electrodes; this scan runs highest bit first (bit 14 = doubletap
+        // center ... bit 0 = touch south), which is exactly the scan order
+        // of the SW_* code constants in skywriter.h. EVERY set bit is
+        // dispatched — a frame may carry several electrodes at once, and
+        // hid_mapping.md §2 requires "all set touch bits in a frame produce
+        // their events" (deviation D4: the old code returned after the
+        // first match, which also skipped every field after TouchInfo,
+        // including the AirWheel decode below).
         uint16_t touch_action = data[SW_PAYLOAD_TOUCH+1] << 8 | data[SW_PAYLOAD_TOUCH];
         uint16_t comp = 1 << 14;
         uint8_t x;
@@ -128,23 +219,55 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
           if( touch_action & comp ){
             this->last_touch = x;
             if( this->handle_touch != NULL ) this->handle_touch(this->last_touch);
-            return;
           }
           comp = comp >> 1;
         }
       }
       
       if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_AIRWHEEL && data[SW_PAYLOAD_HDR_SYSINFO] & SW_SYS_AIRWHEEL ){
-        
-        double delta = (data[SW_PAYLOAD_AIRWHEEL] - lastrotation) / 32.0;
-        
-        if( delta != 0 && delta > -0.5 and delta < 0.5 ){
-          if( this->handle_airwheel != NULL ) this->handle_airwheel(delta * 360.0);  
+        // AirWheel rotation, mirroring the Python driver's reference
+        // implementation (library/skywriter/__init__.py, fix items P3.4 /
+        // P3.9, deviation D3):
+        //  * AirWheelInfo byte 0 is a free-running 8-bit rotation counter
+        //    (0-255, wraps 255->0 clockwise, 32 counts = 1 revolution, so
+        //    1 count = 11.25 degrees — Interface.pdf Table 4-10);
+        //  * the counter is free-running, so the FIRST valid frame after
+        //    driver start or after any stretch of AirWheel-invalid frames
+        //    is a SILENT baseline: a hand re-entering the field must not be
+        //    read against a stale counter (hid_mapping.md §2 baseline rule);
+        //  * consecutive frames compare with the SIGNED 8-bit difference
+        //    d = ((cur - last + 128) % 256) - 128, so a 255->0 wrap counts
+        //    as +1 step, not -254.
+
+        if( !this->airwheel_counter_valid ){
+          // Silent baseline: record the reference only, emit nothing.
+          this->airwheel_counter_valid = true;
+          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
         }
-        
-        this->rotation += delta * 360.0;
-        this->rotation %= 360;
-        
-        this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+        else{
+          int delta = (( data[SW_PAYLOAD_AIRWHEEL] - this->lastrotation + 128) % 256 + 256) % 256 - 128;
+          
+          // Delta is in degrees, quantized to 11.25 degrees per sensor step
+          // (32 counts = full 360 degree rotation)
+          // Positive numbers equal clockwise delta, negative are counter-clockwise
+          float degrees = (float)delta * 11.25f;
+          
+          if( degrees != 0.0f ){
+            if( this->handle_airwheel != NULL ) this->handle_airwheel(degrees);
+            
+            this->rotation += degrees;
+            
+            if( this->rotation < 0.0f ) this->rotation = 0.0f;
+            if( this->rotation > 1000.0f ) this->rotation = 1000.0f;
+          }
+          
+          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+        }
+      }
+      else{
+        // This frame carries no valid AirWheel data: the counter may have
+        // free-run meanwhile, so re-baseline on the next valid frame
+        // (same rule as the Python driver's `_lastrotation = None`).
+        this->airwheel_counter_valid = false;
       }
 }

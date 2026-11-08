@@ -11,7 +11,8 @@ Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ A
 
 ## Environment
 - Container Python: `Python 3.12.3`; Arduino toolchain: `/home/user/local/bin/arduino-cli`.
-- Pico W target (`pico-arduino/flash.sh`): FQBN `rp2040:rp2040:rpipicow` (Earle Philhower core), serial `/dev/ttyACM*` or `/dev/ttyUSB*` (running USB ID `2e8a:f00a`), BOOTSEL drive `RPI-RP2` (bootloader USB ID `2e8a:0003`). Connect via a direct USB port (unreliable behind hubs).
+- Pico W target (`pico-arduino/flash.sh`): FQBN `rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble` (Earle Philhower core).
+  The `ipbtstack=ipv4btcble` suffix is the core's "IPv4 + Bluetooth" build menu: the BTstack (Bluetooth) libraries are not linked without it, so any BLE HID (Bluetooth Low Energy Human Interface Device) sketch — e.g. `pico-arduino/SkywriterController` — fails a plain-FQBN build with "This library needs Bluetooth enabled". `pico-arduino/flash.sh` and `run_tests.sh` pass this option; use it for any manual `arduino-cli compile`. Serial port `/dev/ttyACM*` or `/dev/ttyUSB*` (running USB ID `2e8a:f00a`), BOOTSEL drive `RPI-RP2` (bootloader USB ID `2e8a:0003`). Connect via a direct USB port (unreliable behind hubs).
 - Package metadata pins: `X-Python-Version: >= 2.7`, `X-Python3-Version: >= 3.4` (`packaging/debian/control`), `install_requires=['RPi.GPIO']` (`library/setup.py`), `autopy==0.51` (`examples/README.md`).
 - System dependencies on Raspberry Pi (`README.md`, `packaging/debian/control`):
   ```bash
@@ -30,7 +31,7 @@ Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ A
   ```
 - **Compile Pico W sketch only** (`pico-arduino/flash.sh`):
   ```bash
-  arduino-cli compile -b rp2040:rp2040:rpipicow --output-dir build path/to/sketch
+  arduino-cli compile -b rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble --output-dir build path/to/sketch
   ```
 - **Install Python dependencies**: `python3 -m pip install skywriter` (`README.md`) or `cd library && python3 setup.py install` (`library/setup.py`).
 - **Lint & Full Debian build**: No Python linter or typechecker is configured (`library/skywriter/__init__.py` has `# noqa: E241` comments). Full Debian build + `lintian` + `gpg --verify` (`packaging/makeall.sh`):
@@ -64,4 +65,4 @@ Contains the Raspberry Pi Python driver (`library/skywriter/__init__.py`), C++ A
 - **Normal `dmesg` errors during UF2 copy**: The RP2040 reboots immediately on the last UF2 block; `device offline error` or `FAT-fs ... unable to read boot sector` in `dmesg` and `sync` failures are normal. If `RPI-RP2` never appears, hold BOOTSEL while plugging in and rerun `pico-arduino/flash.sh`. If it returns as `RP2 Boot` (`0003`) instead of `Pico W` (`f00a`), verify `build/*.uf2` is non-empty and starts with `55 46 32 0a` (`UF2\n`).
 - **`library/test.py` fails on import without patching**: It imports external `mock` (not in Python 3.12 stdlib unless `unittest.mock` is aliased) and `@skywriter.airwheel()` calls `setup()`, which loops 10x in `get_status(0xA2)` checking `data[3] == 0x15` (`RuntimeError` on unconfigured `Mock()`).
 - **Infinite background thread on setup**: `skywriter.setup()` starts a daemon `AsyncWorker` polling thread (`_start_poll()`). Call `skywriter._stop_poll()` to stop it cleanly.
-- **Arduino `poll()` & Python `_on_airwheel` quirks**: `_SkyWriter::begin()` in `arduino/Skywriter/skywriter.cpp` does not send `SW_SET_RUNTIME` (`0xA2`) config commands and `poll()` resets `xfer` to `INPUT` instead of `INPUT_PULLUP`. In `library/skywriter/__init__.py`, `_on_airwheel` is initialized to `[]` (line 62) and checked with `callable(_on_airwheel)` (line 255).
+- **Arduino `poll()` & Python `_on_airwheel` quirks**: `_SkyWriter::begin()` in `arduino/Skywriter/skywriter.cpp` does not send `SW_SET_RUNTIME` (`0xA2`) config commands and `poll()` resets `xfer` to `INPUT` instead of `INPUT_PULLUP` (both truth-checked 2026-11-05, fix item P3.19; sensor configuration belongs to the P3.16 firmware). In `library/skywriter/__init__.py`, `_on_airwheel` is initialized to `[]` (line 96) and checked with `callable(_on_airwheel)` (line 344).

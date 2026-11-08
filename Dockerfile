@@ -60,10 +60,13 @@ ENV LANG=C.UTF-8 \
 
 # The arduino-pico core ships glibc-linked binaries (arm-none-eabi-gcc, picotool). gcompat
 # and libstdc++ let them run on musl; eudev-libs supplies the libudev.so.1 that picotool
-# needs to build the UF2 image.
+# needs to build the UF2 image. g++ + musl-dev give the fixture-replay harness a
+# host C++ compiler for tests/cpp (it compiles arduino/Skywriter/skywriter.cpp
+# on the host behind Arduino/Wire shims); without them the harness falls back
+# to a pip-installed `ziglang` wheel (tests/adapters_cpp.py auto-detects either).
 RUN apk add --no-cache \
         bash ca-certificates curl git jq openssh-client ripgrep tini \
-        gcompat libstdc++ eudev-libs \
+        gcompat libstdc++ eudev-libs g++ musl-dev \
         python3 py3-mock py3-pip py3-pytest py3-setuptools
 
 RUN case "$(uname -m)" in \
@@ -91,7 +94,8 @@ RUN install -d -m 0700 /home/dev/.ssh && \
                /home/dev/.arduino15 /home/dev/.arduino15/libraries && \
     echo '{"$schema":"https://opencode.ai/config.json","model":"opencode-go/glm-5.3-flash","permissions":[{"action":"*","resource":"*","effect":"allow"}]}' \
         > /home/dev/.config/opencode/opencode.json && \
-    ln -s /workspace/arduino/Skywriter /home/dev/.arduino15/libraries/Skywriter
+    ln -s /workspace/arduino/Skywriter /home/dev/.arduino15/libraries/Skywriter && \
+    ln -s /workspace/pico-arduino/SkywriterHID /home/dev/.arduino15/libraries/SkywriterHID
 
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["bash"]

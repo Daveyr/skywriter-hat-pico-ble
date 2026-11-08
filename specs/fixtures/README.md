@@ -51,6 +51,18 @@ so every field is present at its fixed offset (see `specs/README.md`):
 Header: `size`(=total bytes incl. header) `flags`(0x08, per vendor examples)
 `seq` `id`(`0x91` sensor, `0x15` status, `0x83` fw version).
 
+### Shorter frames (mask without the AirWheel field)
+
+`DataOutputConfigMask` decides which payload elements are present, in the
+fixed element order of `specs/README.md`. `F21_circle_cw` / `F22_circle_ccw`
+use mask `0x0003` (DSPStatus + GestureInfo — the AirWheel-disabled
+configuration under which the sensor recognizes circles, `hid_mapping.md` §6
+"Circle/AirWheel exclusivity"): only elements *before* AirWheelInfo are
+present, so every fixed offset up to GestureInfo is unchanged and the
+decoders' indexing stays valid. Elements that would shift when the AirWheel
+field is absent (xyzPosition and after) do not appear in these frames — no
+fixture yet exercises a mask that shifts them.
+
 ## Provenance
 
 Each fixture's `source` field in the manifest is one of:
@@ -69,15 +81,20 @@ Each fixture's `source` field in the manifest is one of:
 ## Time-dependent expectations
 
 Release-after-silence (`TOUCH_RELEASE_MS`) and auto-scroll cadence are
-wall-clock behaviours: scenarios that exercise them note `time_gap_ms` and the
-expected timed outcome in `expect`. Replay tests must simulate the gap (virtual
-clock) rather than sleep.
+wall-clock behaviours: scenarios that exercise them carry `time_gap_ms` and
+describe the timed outcome in their `note` / `expect.hid` records. Replay
+tests must simulate the gap (virtual clock) rather than sleep.
 
 ## Adding fixtures
 
 1. Add the next `F##` `.hex` file.
 2. Describe it in `manifest.json` (`frames`) with provenance.
-3. Add or extend a `scenario` with the expected canonical events, per-driver
-   callbacks, and HID output. Expectations must match `specs/hid_mapping.md`
-   §6 — if you find yourself writing a different expectation, the spec needs
-   an update first (and that is a spec change to review, not a test to bend).
+3. Add or extend a `scenario` with structured expectations: `expect.canonical`
+   in the `tests/canonical.py` grammar and `expect.hid` in the
+   `tests/hid_grammar.py` grammar (see `tests/README.md`). Known driver
+   deviations may only be tolerated via `omit_pending` / `keys_pending`
+   annotations that reference an open row in `specs/README.md`'s ledger — not
+   by silently writing weaker expectations. Expectations must match
+   `specs/hid_mapping.md` §6 — if you find yourself writing a different
+   expectation, the spec needs an update first (and that is a spec change to
+   review, not a test to bend).

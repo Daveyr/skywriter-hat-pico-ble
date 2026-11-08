@@ -54,7 +54,8 @@ EOF
 }
 
 # 2. Python driver unit tests (mocked hardware — no real I2C allowed).
-# Known red until fix_plan.md item W5 is done (see AGENTS.md Gotchas).
+# Offline: the fake I2C bus answers the startup handshake with the recorded
+# specs/fixtures/F16_status_ack_a2.hex frame (W5).
 library_unit() {
   (cd library && python3 test.py)
 }
@@ -65,13 +66,18 @@ fixture_replay() {
   if [ -d tests ] && ls tests/test_*.py >/dev/null 2>&1; then
     python3 -m pytest -q tests/
   else
-    echo "no tests/ yet — fixture replay tests are fix_plan.md item P3.3 (skipped, not a failure)"
+    echo "no tests/ yet — fixture replay tests landed with fix_plan item P3.1 (skipped, not a failure)"
     return 0
   fi
 }
 
 # 4. Firmware compiles: every sketch folder (directory containing a .ino)
 # must build for the Pico W (Raspberry Pi's wireless microcontroller board).
+# The `ipbtstack=ipv4btcble` menu selects "IPv4 + Bluetooth" — the core's
+# BTstack (its Bluetooth implementation) libraries are not even linked
+# without it, so any sketch using the BLE HID libraries fails a plain build
+# with "This library needs Bluetooth enabled". Harmless for sketches that
+# don't touch Bluetooth.
 # Build output goes to a temporary directory so the flash-tool-managed
 # build/ folders are never touched.
 sketch_compile() {
@@ -80,11 +86,12 @@ sketch_compile() {
     return 0
   fi
   local out rc=0 sketch dir
+  local FQBN='rp2040:rp2040:rpipicow:ipbtstack=ipv4btcble'
   out=$(mktemp -d)
   while IFS= read -r sketch; do
     dir=$(dirname "$sketch")
     echo "compiling $dir"
-    arduino-cli compile -b rp2040:rp2040:rpipicow --output-dir "$out/$(basename "$dir")" "$dir" || rc=1
+    arduino-cli compile -b "$FQBN" --output-dir "$out/$(basename "$dir")" "$dir" || rc=1
   done < <(find pico-arduino arduino -name '*.ino' -not -path '*/build/*' 2>/dev/null)
   rm -rf "$out"
   return $rc
