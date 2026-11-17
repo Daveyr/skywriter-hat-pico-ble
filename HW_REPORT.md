@@ -73,10 +73,10 @@ Each row is a test or observation, its result, and the plan item it belongs to.
 | Bridges between signal wires | PASS: no solder bridging | P4.0a T0 |
 | External pull-up resistors | Soldered on the veroboard, each between 3V3 and its signal's rail. Measured 2026-11-17 with power off: SDA 4.69 kΩ, SCL 4.67 kΩ, TRFR 10.00 kΩ, RESET 10.00 kΩ. PASS: the measured values match the fitted values | P4.0a H3 |
 | Sensor-end 3V3 reading | 3.3 V at the end of the supply wire. PASS | P4.0a T1 |
-| Full serial log, session 3 | NOT CAPTURED | P4.0a T3 |
+| Serial log, session 3 | PARTIAL: captured after boot, so the boot lines are missing. Shows repeated sensor firmware messages (section 7) | P4.0a T3 |
 | `hid-recorder` or `evtest` on the laptop, session 3 | NOT RUN | P4.0a T4 |
 | Health counters (P3.22) | Not implemented; no counter data exists | P4.0a T5 |
-| Flex test (T6) | Not run; needs P3.22 flashed | P4.0a T6 |
+| Flex test (T6) | PARTIAL: flex done by hand, joints not recorded, no counters in the flashed build. Repeated sensor firmware messages seen; timing against the flex unknown (section 7) | P4.0a T6 |
 
 ## 4. Failures and what to do with each
 
@@ -104,6 +104,11 @@ Each row is a test or observation, its result, and the plan item it belongs to.
   symptom. Hypothesis for the loop to check, not a finding: the key report the
   firmware sends may carry a modifier bit (Ctrl) or a stuck key. Check how the
   keyboard report is built before guessing further.
+- **F6 — repeated sensor firmware messages (session 3 flex, 2026-11-17).** Not a
+  confirmed code fault. The sensor's firmware message repeats (section 7). That
+  points at the sensor link: either the sensor is restarting, or the Pico is
+  reading the same stalled message again. Locate it with the flex test and the
+  P3.22 counters before changing code. P3.23 covers the stall case.
 
 ## 5. Human steps before the next hardware loop
 
@@ -141,7 +146,56 @@ The user's answers to the open questions:
   "select all" looked like Ctrl+A when the fingers were at the sensor's edges.
   The cause is not known. It is recorded as F5.
 
-## 7. Must not be done by the loop
+## 7. Flex test evidence (session 3, 2026-11-17)
+
+**Build flashed:** the current `SkywriterController` (before P3.22 and P3.23).
+It has no health counters, so this flex test can only be judged from the serial
+log and the laptop's behaviour.
+
+**Flex performed:** by hand, described by the user as "a good flex". The joints
+and wires flexed are not recorded. The user's fingers may have been near the
+sensor during the flex, so any gesture-related input in this period is not
+clean evidence.
+
+**Serial capture:** `arduino-cli monitor -p /dev/ttyACM0 -c baudrate=115200`,
+started after the board had booted. Boot lines (`SKYWRITER-HID boot`,
+`sensor_ok`, `hid_started`) are missing. The log has no timestamps.
+
+Lines captured, in order:
+- `SKYSTATE waiting_for_host` (repeated).
+- `SKYSTATE pace report_interval_ms=45`, then `SKYSTATE pace report_interval_ms=15`.
+- Pairs of `SKYSTATE ble_resync battery=100 neutral_report` and
+  `SKYSTATE ble_connected`. No `ble_dropped` line. The earlier full capture had
+  four pairs; the latest excerpt has two.
+- `SKYWRITER-HID sensor_firmware valid=0xAA version=1.1.18;p:HillstarV01;...`.
+  The earlier full capture had one copy. The latest excerpt has **eight copies**,
+  all identical, after the connection pairs. None of the sensor's motion data is
+  printed, because the sketch does not print it.
+
+**Laptop behaviour (not in the log):** an "N" and a "select all" were seen on
+the laptop. Their timing against the flex and the serial log is not recorded.
+
+**What the firmware message means (from `arduino/Skywriter/skywriter.cpp`
+lines 66–69 and 100–123):** the sketch prints this line each time a poll reads
+a firmware-info frame (identity byte 0x83). The sensor should send it once at
+start-up. Eight copies mean one of two things, neither confirmed:
+- the sensor restarted several times (each restart sends the message again),
+  pointing at the supply, the reset line (GPIO 10) or a brownout (H4, H5); or
+- the Pico re-read the same message because the sensor stopped moving on to new
+  data (a stall), pointing at the transfer-line handling (H1, fixed by P3.23)
+  or a bad joint on the transfer or data lines.
+
+**Open, needed to decide between them:**
+- Did the copies start during the flex, or after it? Not recorded.
+- Did the laptop's Bluetooth link drop at any point? Not recorded.
+- Which joints and wires were flexed, and in what order? Not recorded.
+- Timestamped capture of a repeat test (for example with pyserial, which the P4.1
+  probe plans to use). Not done.
+- With P3.22 flashed: a restart gives a small count of firmware messages, one per
+  restart. A stall gives the firmware count climbing at the read rate (hundreds
+  per second) while the motion count stops. Not yet possible.
+
+## 8. Must not be done by the loop
 
 - Do not change the wiring, flash the board, or use `arduino-cli upload`.
 - Do not mark any P4 item as passed. P4.0a stays open until the human steps
