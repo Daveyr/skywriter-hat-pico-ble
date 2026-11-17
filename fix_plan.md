@@ -295,6 +295,56 @@ docker run -it --rm \
     working, so this is a total loss of input, not the haphazard behaviour of
     sessions 1–2. It blocks P4.0 and is logged as the first Phase-4 gate, P4.0a.
     No code was changed in this update.
+   Update (2026-11-17, loop iteration after HW_REPORT.md — code commit
+   `1c8bbb2`): the hardware report's code-fixable failures are closed, and
+   `HW_REPORT.md` is removed (its facts are preserved here). Section 4 row
+   outcomes:
+   - **F1 (Page Up / Page Down typed letters, P3.21) — FIXED** by P3.21
+     (commit `1c8bbb2`): usage constants corrected to the USB HID Usage
+     Tables values (Page Up 0x4B = 75, Page Down 0x4E = 78; 0x4F = 79 is
+     Right Arrow) in the spec §6 revision note, the mapper constants, the
+     manifest and the harness grammar; and the firmware sink now sends
+     keyboard usages in the Bluetooth keyboard library's non-printing
+     range (usage + 136) on BOTH press and release — the raw usage 78
+     that typed "N" can never reach the library again (two new source
+     pins in `tests/test_firmware_sketch.py`; `tap_north`/`tap_south`
+     manifest expectations now 75/78 and replay-asserted). On hardware:
+     a north tap must give Page Up and a south tap Page Down with no
+     letters (checked in P4.0 / P4.5).
+   - **F2 (no input since session 3, P4.0a) — code parts landed**: P3.22
+     (the `SKYSTATE health` counters line, the session's main instrument)
+     and P3.23 (the transfer line is always released, with its pull-up
+     restored — H1 and H2) are in commit `1c8bbb2` and ready to flash.
+     The wiring (H3) is still not eliminated (joint quality / flexing),
+     and H4/H5/H6 stay hardware questions. The human steps in the
+     report's section 5 (flash `pico-arduino/SkywriterController` via
+     `./flash.sh SkywriterController`, full boot log T3, `hid-recorder`/
+     `evtest` T4, counters T5, flex T6) are the next hardware loop's work.
+   - **F3 (haphazard pointer, P4.0) — still blocked by F2**, unchanged:
+     do not retune `GAIN` or `JUMP_THRESHOLD` yet.
+   - **F4 (duplicate connect lines, P4.3) — OPEN**, unchanged: check the
+     next serial log (now with uptime + disconnect counters) before
+     changing connection handling.
+   - **F5 ("select all" ≈ Ctrl+A, 2026-11-17) — recorded, hypothesis
+     narrowed in code**: the Bluetooth keyboard library's `press()` adds
+     modifier bits ONLY through its ASCII path (Shift / AltGr from the
+     layout table; there is no Ctrl path in `press()` at all), so the old
+     raw-usage-78 call could produce "N" (+ Shift) but NEVER Ctrl+A.
+     After P3.21 the raw path is gone entirely (`usage + 136` on every
+     keyboard press/release — `KEY_PAGE_UP` 0xD3 = 136 + 75 in the core's
+     own table). Consequence for the next session: with the P3.21 build
+     flashed, a "select all" would have to come from somewhere other than
+     this firmware's keyboard report (a stuck host-side state, another
+     input device, or the mouse report misread) — if it recurs, check the
+     laptop's device list first (T4's `evtest`/`hid-recorder` shows the
+     device each event came from).
+   - **F6 (repeated sensor firmware messages, session 3 flex) — now
+     decidable**: with P3.22 flashed, a sensor restart gives a small
+     firmware-frame count with a fresh `sensor_firmware` line each time
+     (and uptime intact unless the Pico itself reset, H5); a stalled read
+     gives the firmware-frame count climbing at the read rate while the
+     sensor-data count stops — and P3.23 removes the one code defect
+     (the line-left-low early return) that could produce such a stall.
     Update (2026-11-17, hardware session 3 follow-up — no code change). All
     sensor-to-Pico wires have moved from the breadboard to veroboard (made on or
     before 2026-11-16; exact date not recorded). Unplugging the Pico changed
@@ -409,74 +459,9 @@ in Phase 4 on hardware
 - [x] P3.19 → done, moved to the Done section below.
 - [x] P3.20 → done, moved to the Done section below (the `READY_FOR_HW`
       marker's Phase-4 test list is the ledger for the outer loop).
-- [ ] P3.21 **Keyboard taps typed letters instead of Page Up / Page Down
-      (found in hardware session 1, 2026-11-08)**: the touch north and south
-      taps should press the keyboard Page Up and Page Down keys (§6), but the
-      laptop received typed letters. Two causes, both traced in the code:
-      (1) Wrong usage numbers. In the USB HID Usage Tables keyboard page, Page
-      Up is 0x4B (75) and Page Down is 0x4E (78); 0x4F (79) is Right Arrow. The
-      spec (`specs/hid_mapping.md` §6), the mapper constants
-      (`SkywriterHIDMapper.h`), the test grammar and manifest, and the test
-      comments all use 78 for Page Up and 79 for Page Down. Cross-check in this
-      repo: the Arduino BLE core's key table gives `KEY_PAGE_UP` 0xD3 = 136 + 75,
-      `KEY_PAGE_DOWN` 0xD6 = 136 + 78, `KEY_RIGHT_ARROW` 0xD7 = 136 + 79.
-      (2) Wrong call path. `SkywriterController.ino` (the sink's
-      `keyboardPress`/`release`) passes the raw usage to
-      `KeyboardBLE.press(uint8_t)`. The core's `HID_Keyboard::press` treats
-      values 0–127 as ASCII characters (usage 78 → "N", 79 → "O") and values
-      136 and up as non-printing keys (usage = value − 136). Fix plan
-      (agent-doable, verifiable offline): correct the usage constants to 75 and
-      78 with a dated revision note in `specs/hid_mapping.md` §6 and the
-      manifest; send keyboard usages through the non-printing range in the
-      sink (`usage + 136`, or the core's `KEY_PAGE_UP` / `KEY_PAGE_DOWN`) for
-      both press and release; update every place that quotes 78/79 (grep for
-      `HID_USAGE_PAGE_`, `KEYBOARD_KEYS`, `_KEYBOARD_KEY_BY_USAGE`, "0x4E",
-      "0x4F"); add source pins in `tests/test_firmware_sketch.py` that no raw
-      usage reaches `press()`/`release()`. This is a defect in the spec's
-      numbers, not a driver deviation: do NOT add a `specs/README.md` deviation
-      row (the harness treats every row as live); record the correction in the
-      spec revision note and this item's Done entry. Verification:
-      `bash run_tests.sh` green; on hardware, a north tap gives Page Up and a
-      south tap gives Page Down, with no letters (checked in P4.0 / P4.5).
-      Observed again 2026-11-17: an "N" appeared in a text box after a north
-      tap (raw usage 78 typed as ASCII "N", part (2) above). The symptom is real
-      on the board, and it is currently the only sign of input at all.
-- [ ] P3.22 **Health counters in the controller sketch (loop-doable; needed
-      by P4.0a T5)**: a status line every 2 s with: uptime in ms (a reset shows
-      as a drop to zero), sensor reads started, reads that returned fewer than
-      4 header bytes (the H1 path), the transfer-line level seen at each poll,
-      frames by message type (sensor data, status, firmware, other),
-      position-valid, touch, gesture and AirWheel events, events dropped while
-      unconnected, HID reports sent by kind (pointer, button, wheel, key,
-      media), and connects and disconnects. The read and transfer-line counters
-      live in the shared library (`arduino/Skywriter/`) as public state, like
-      `last_gesture`, so the examples still compile. The 200 Hz path only
-      increments counters; it never prints. Verified by `bash run_tests.sh`
-      green, a source-level pin in `tests/test_firmware_sketch.py`, and one
-      captured status line on the board (P4.0a T5).
-      Priority raised 2026-11-17: with no oscilloscope or logic analyser, these
-      counters are the only view of the transfer line and the failed reads over
-      time. Build this first, and include the two shares (short reads and
-      TS-low polls as a fraction of all polls) so they are visible without
-      arithmetic.
-- [ ] P3.23 **The Arduino `poll()` must always release the transfer line
-      (loop-doable: test first; hardware confirmation in P4.0a)**: fix H1 in
-      `arduino/Skywriter/skywriter.cpp` by releasing the transfer (TS) line on
-      the short-read `return` (lines 41–43) as well as on the normal path
-      (lines 73–74), as the Python driver does since P3.11d. Also restore the
-      internal pull-up on release, as the Python driver does (its release sets
-      the pull-up, library line 534) — this is H2 and reopens the P3.19
-      pin-mode decision; record the outcome in this item's Done entry. Test
-      first: extend the `tests/cpp` Arduino shim so `pinMode` and
-      `digitalWrite` are recorded, then add a host test that forces a short
-      read and asserts the line ends released. The test must FAIL on the current
-      code and PASS after the fix. Do not change the public callbacks or the
-      frame decoding. All examples share the library, so `run_tests.sh` must
-      still compile them. Add a row to `specs/README.md` only if a sentence in
-      `specs/` is contradicted; check first. This fix is needed whatever the
-      root cause: one failed read must not stop input for good. If P3.22 shows
-      many short reads, a bounded retry inside `poll()` (as the boot path
-      already has) becomes a separate item to decide.
+- [x] P3.21 → done, moved to the Done section below.
+- [x] P3.22 → done, moved to the Done section below.
+- [x] P3.23 → done, moved to the Done section below.
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -612,6 +597,14 @@ item names what needs the Pico W plugged in.
       - T6 — power ON, gently, after T0 and T1 pass, with P3.22 flashed: flex
         each joint and wire in turn while watching T5. If the counters change at
         the moment one joint moves, that joint is the fault.
+      Update (2026-11-17): the loop's code parts are landed (commit
+      `1c8bbb2`) — P3.22's `SKYSTATE health` counters (T5's instrument)
+      and P3.23's always-release + pull-up restore (removes H1 and H2's
+      silent-stall behaviour outright). Flash the diagnostic build with
+      `./flash.sh SkywriterController` from the `pico-arduino` folder and
+      run T3/T4/T5/T6 below; H1/H2 can no longer explain a quiet console
+      — if input is still absent with the counters green, H3/H4/H5/H6
+      are what remain, and the counters separate them.
       Closure: the tests that apply (T0–T6) recorded with their logs in
       `HW_REPORT.md`; one root cause named and linked to its fix (P3.23 for H1;
       a veroboard repair for H3; a new item for H4–H5 if confirmed); then P4.0
@@ -799,6 +792,110 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- W8 — ledger housekeeping done (commit `1c8bbb2`): (a) the P3.17b Done
+  entry's "commit `<HASH>`" placeholder is now the real hash `5553de4`
+  (the loop's automatic-snapshot commit, which carried the
+  otherwise-uncommitted P3.17b work — found via `git log -S
+  "FLASH-BACKED"`); (b) the duplicated P3.1 entry and "Environment note
+  discovered by P3.1" at the bottom of the Done section were removed
+  (one copy of each remains — the earlier copy, whose wording matches
+  the current harness: `tests/build/` is covered by the tree-wide
+  `build/` .gitignore rule); (c) verified no `<HASH>` placeholder
+  remains in this file and `bash run_tests.sh` stayed green.
+- P3.23 — the Arduino driver always releases the sensor's transfer line
+  (commit `1c8bbb2`). In plain language: the sensor says "new data is
+  waiting" by pulling its data-ready wire low; the driver holds that wire
+  low while it clocks the data over the I2C bus, and MUST let go
+  afterwards or the sensor's buffers stay locked — the sensor goes
+  silent forever while the Bluetooth link and serial console look
+  perfectly normal (the leading suspect for hardware session 3's total
+  input loss, P4.0a hypothesis H1). The Python driver had exactly this
+  defect and got the fix in P3.11d; the Arduino driver now has it too:
+  the failed-read early return (fewer than the 4 header bytes) releases
+  the transfer (TS) line before returning, instead of stranding it LOW.
+  Second half (H2, the reopened P3.19 pin-mode decision — outcome
+  recorded): the release now RESTORES the pin's internal pull-up on
+  every exit path (`pinMode(xfer, INPUT_PULLUP)`, as the Python driver's
+  release does), so a loose or disconnected TS wire reads consistently
+  high instead of at random (a random low read would trigger the
+  failed-read path continuously). The old plain-INPUT release is gone
+  from both the driver and the sketch's acknowledge path; the AGENTS.md
+  gotcha that documented the quirk was updated with a dated note.
+  Test-first discipline held: the shims (`tests/cpp/Arduino.h` +
+  `arduino_shim.cpp`) now RECORD every `pinMode`/`digitalWrite` call,
+  the new host program `tests/cpp/host_pin_release_main.cpp` drives the
+  REAL driver through its genuine `poll()` on both paths (normal F01
+  frame; empty/failed read), and `tests/test_driver_ts_pin.py` asserts
+  every poll ends with the release pair (line driven high, then
+  INPUT_PULLUP) — verified FAILING on the pre-fix code (3 failures)
+  and PASSING after. No public callbacks or frame decoding changed; all
+  three shared examples still compile (run_tests.sh green 4/4).
+  Decision note: no `specs/README.md` deviation row was added — no
+  sentence in `specs/` pins the release pin mode (checked first). If
+  P3.22 shows many short reads on hardware, a bounded retry inside
+  `poll()` (as the boot path already has) becomes a separate item.
+- P3.22 — the health counters are live (commit `1c8bbb2`), the hardware
+  gate P4.0a's main instrument (with no oscilloscope or logic analyser,
+  these counters are the only view of the transfer line and the failed
+  reads over time):
+  - **Shared library (`arduino/Skywriter/`) public state** (so the
+    examples keep compiling): `polls` (every `poll()` call),
+    `ts_low_polls` (polls where the data-ready line read LOW — a real
+    transfer), `short_reads` (transfers whose read returned fewer than
+    the 4 header bytes — the H1 path) and frames by message identity
+    (`frames_sensor_data` 0x91, `frames_status` 0x15, `frames_firmware`
+    0x83, `frames_other`). Increment only — the 200 Hz hot path never
+    prints.
+  - **Sketch counters** (`SkywriterController.ino`): dispatched sensor
+    events (`ev_position`/`ev_touch`/`ev_gesture`/`ev_airwheel`, counted
+    after the unconnected drop gate), `ev_dropped` (events dropped while
+    unconnected — the H6 probe's number), HID reports by kind counted at
+    the radio call sites (`hid_pointer`/`hid_button`/`hid_wheel`/
+    `hid_key`/`hid_media` — a click counts 2 button transitions, the
+    scheduled tap pulses included), and Bluetooth link life cycle
+    (`ble_connects`/`ble_disconnects` — the F4 duplicate-connect
+    question's number).
+  - **The status line**: once every `HEALTH_INTERVAL_MS` = 2000 ms from
+    `loop()`, one grep-friendly `SKYSTATE health` line with uptime (a
+    board reset shows as uptime dropping to zero) and the two shares
+    ALREADY DIVIDED OUT — short reads and TS-low polls as a percentage
+    of all polls — per the P4.0a T5 requirement ("visible without
+    arithmetic"). Restart-vs-stall is now decidable from the counter
+    shapes (see the F6 outcome note in the status snapshot).
+  - Pins: `test_health_status_line_printed_every_two_seconds` (every
+    counter named in the line, the 2 s gate guards the print) and
+    `test_the_200hz_sensor_path_never_prints` in
+    `tests/test_firmware_sketch.py`. Verified: `bash run_tests.sh` green
+    4/4; sketch compiles (22 % flash / 34 % RAM).
+- P3.21 — taps no longer type letters (commit `1c8bbb2`): the two
+  traced causes are both fixed, spec and code together.
+  (1) **Wrong usage numbers**: the USB HID Usage Tables keyboard page
+  gives Page Up = 0x4B (75) and Page Down = 0x4E (78); 0x4F (79) is
+  Right Arrow. `HID_USAGE_PAGE_UP`/`HID_USAGE_PAGE_DOWN` in
+  `SkywriterHIDMapper.h` are now 75/78 with the dated revision note
+  (cross-checked against the core's key table: `KEY_PAGE_UP` 0xD3 =
+  136 + 75, `KEY_PAGE_DOWN` 0xD6 = 136 + 78). Every place quoting
+  78/79 was updated: `specs/hid_mapping.md` §6 (new keyboard-usage
+  revision note — a spec-data bug, NOT a driver deviation, so no
+  `specs/README.md` row), `specs/fixtures/manifest.json` (top note +
+  `tap_north`/`tap_south` expectations now usage 75/78 with per-scenario
+  notes), `tests/hid_grammar.py` (`KEYBOARD_KEYS` + docstring),
+  `tests/adapters_mapping.py` (`_KEYBOARD_KEY_BY_USAGE`),
+  `tests/test_mapper_unit.py`, `tests/cpp/host_mapping_main.cpp`.
+  (2) **Wrong call path**: `pulse_fire()`'s keyboard case now sends
+  `usage + KEYBOARD_NON_PRINTING_OFFSET` (136) to
+  `KeyboardBLE.press()`/`release()` on BOTH press and release — the
+  core treats values 0–127 as ASCII characters (usage 78 typed "N" on
+  hardware, sessions 1 and 2026-11-17) and only 136+ as non-printing
+  keys. The conversion happens exactly once (in `pulse_fire`; the sink's
+  `keyboardPress` keeps the RAW usage — pinned), so the old raw path is
+  unreachable. New pins: `test_keyboard_usages_corrected_to_75_and_78`
+  and `test_no_raw_keyboard_usage_reaches_press_or_release` (asserts
+  every keyboard call site applies the offset and the known-bad shapes
+  cannot return). Side benefit for F5: `press()`'s ASCII path can only
+  add Shift/AltGr modifiers — Ctrl+A was never producible from this
+  path, and after this fix no raw usage reaches it at all. Verified:
+  `bash run_tests.sh` green 4/4; 110 pytest tests.
 - P3.20 — the hardware gate fired (this commit): with 3a–3e complete and
   every remaining Phase-3 item closed, the `READY_FOR_HW` marker is written
   in the repository root (gitignored, never committed) listing exactly what
