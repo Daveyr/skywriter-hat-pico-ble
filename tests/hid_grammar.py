@@ -17,7 +17,8 @@ Records (channel/action -> keys)::
 
 Usage codes are the decimal USB HID usage IDs from hid_mapping.md §6:
 Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Increment 0x00E9=233,
-Volume Decrement 0x00EA=234; Page Up 0x4E=78, Page Down 0x4F=79.
+Volume Decrement 0x00EA=234; Page Up 0x4B=75, Page Down 0x4E=78 (corrected
+from the wrong 78/79 by fix item P3.21, 2026-11-17 — 0x4F is Right Arrow).
 
 What this module verifies today is **well-formedness** (every ``expect.hid``
 list parses against the grammar above) — plus, since fix item P3.12, the
@@ -43,7 +44,7 @@ CONSUMER_ACTIONS = {
 
 BUTTONS = ('left', 'middle', 'right')
 BUTTON_STATES = ('down', 'up')
-KEYBOARD_KEYS = {'page_up': 78, 'page_down': 79}
+KEYBOARD_KEYS = {'page_up': 75, 'page_down': 78}
 CONSUMER_USAGES = {
     181: 'Scan Next Track (0x00B5)',
     182: 'Scan Previous Track (0x00B6)',

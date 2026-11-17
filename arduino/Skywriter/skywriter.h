@@ -107,6 +107,31 @@ class _SkyWriter
     unsigned char last_gesture_class;  // bits 12-15: 0 garbage, 1 flick, 2 circle
     bool last_gesture_edge;            // bit 16: edge-flick flag
     unsigned int  x, y, z;
+    // Health counters (fix item P3.22, hardware gate P4.0a T5): public
+    // state like `last_gesture`, so any sketch (and the serial probe) can
+    // read them without touching the driver's API. They only ever
+    // increment — the driver itself never prints.
+    //   polls            — every poll() call (the loop calls it at 200 Hz).
+    //   ts_low_polls     — polls where the sensor's data-ready (transfer,
+    //                      TS) line read LOW, i.e. a transfer started.
+    //   short_reads      — transfers whose I2C read returned fewer than
+    //                      the 4 header bytes (the H1 failed-read path;
+    //                      with P3.23's fix that path releases the line).
+    //   frames_sensor_data / frames_status / frames_firmware / frames_other
+    //                    — complete frames read, by message identity
+    //                      (0x91 sensor data, 0x15 System_Status ack,
+    //                      0x83 Fw_Version_Info, anything else "other").
+    //                      A firmware count climbing at the read rate
+    //                      while sensor data stops = a stalled read
+    //                      (session-3 symptom); a small fresh count =
+    //                      the sensor restarted (H4).
+    unsigned long polls = 0;
+    unsigned long ts_low_polls = 0;
+    unsigned long short_reads = 0;
+    unsigned long frames_sensor_data = 0;
+    unsigned long frames_status = 0;
+    unsigned long frames_firmware = 0;
+    unsigned long frames_other = 0;
     // Accumulated AirWheel rotation in degrees (clamped 0..1000, mirroring
     // the Python driver's `rotation` global — the P3.4 reference).
     float rotation = 0.0f;

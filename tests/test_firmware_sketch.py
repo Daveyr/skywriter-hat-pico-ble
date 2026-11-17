@@ -439,3 +439,102 @@ def test_pace_resets_on_link_loss():
         "mapper.set_report_interval_ms(SkywriterHIDMapper::REPORT_INTERVAL_MS)")
     assert reset_at > disconnect_at, (
         "the pace reset belongs to the link-loss drain")
+
+
+# ------------------------------------- P3.21: keyboard usage codes (fix item)
+# (Hardware sessions 1 + the 2026-11-17 "N": taps typed letters. Two causes,
+# both fixed: the usage constants were 78/79 where the USB HID Usage Tables
+# keyboard page gives Page Up 75 / Page Down 78, and the raw usage reached
+# KeyboardBLE.press(), which treats 0-127 as ASCII characters — 78 = "N".)
+
+def test_keyboard_usages_corrected_to_75_and_78():
+    """The mapping engine's keyboard usage constants are the USB HID Usage
+    Tables values: Page Up 0x4B = 75, Page Down 0x4E = 78 (0x4F = 79 is
+    Right Arrow) — cross-checked against the core's key table
+    (KEY_PAGE_UP = 0xD3 = 136 + 75, KEY_PAGE_DOWN = 0xD6 = 136 + 78)."""
+    header = (pathlib.Path(__file__).resolve().parents[1] / "pico-arduino"
+              / "SkywriterHID" / "src" / "SkywriterHIDMapper.h").read_text()
+    assert "HID_USAGE_PAGE_UP = 75" in header
+    assert "HID_USAGE_PAGE_DOWN = 78" in header
+    assert "HID_USAGE_PAGE_UP = 78" not in header, (
+        "the old wrong constant (78 = the corrected Page Down) must not "
+        "survive anywhere")
+
+
+def test_no_raw_keyboard_usage_reaches_press_or_release():
+    """The Bluetooth keyboard library's press()/release() treat values
+    0-127 as ASCII characters (raw usage 78 typed the letter "N") and only
+    values 136 and up as non-printing keys (usage = value - 136). Every
+    keyboard press AND release in the sketch must go through the
+    non-printing-range offset, and no call site may pass a raw usage."""
+    code = sketch_code()
+    assert "KEYBOARD_NON_PRINTING_OFFSET = 136" in code, (
+        "the non-printing range offset must exist as a named constant")
+    # Every KeyboardBLE.press/release call in the sketch lives in
+    # pulse_fire and applies the offset to the usage.
+    calls = re.findall(r"KeyboardBLE\.(press|release)\((.*?\n?.*?)\);",
+                       code)
+    assert calls, "the sketch must press/release the keyboard somewhere"
+    for action, arg in calls:
+        assert "KEYBOARD_NON_PRINTING_OFFSET" in arg, (
+            f"KeyboardBLE.{action}({arg!r}) must add the non-printing "
+            f"range offset — a raw usage would be typed as a letter")
+    # The known-bad shapes must never return.
+    assert "KeyboardBLE.press((uint8_t)usage)" not in code
+    assert "KeyboardBLE.release((uint8_t)usage)" not in code
+    # The sink's keyboardPress keeps the RAW usage (the conversion happens
+    # exactly once, in pulse_fire, for both press and release).
+    sink_region = code[code.index("void keyboardPress"):
+                       code.index("void consumerPress")]
+    assert "usage" in sink_region and "KEYBOARD_NON_PRINTING_OFFSET" \
+        not in sink_region, (
+        "the conversion must happen once, in pulse_fire — not also in the "
+        "sink (a double offset would send usage + 272)")
+    # The ASCII-typing reason must stay documented next to the constant.
+    assert "ASCII" in sketch_source()
+
+
+# ------------------------------------- P3.22: health counters (fix item) ---
+# (The hardware gate P4.0a's main instrument: with no oscilloscope or logic
+# analyser, these counters are the only view of the transfer line and the
+# failed reads over time. The sensor-side read counters live in the shared
+# driver library as public state — see tests/test_driver_ts_pin.py for the
+# release behaviour they sit next to.)
+
+def test_health_status_line_printed_every_two_seconds():
+    """The sketch prints one `SKYSTATE health` status line every 2 s with:
+    uptime, the library's read counters with their shares (short reads and
+    transfer-line-low polls as a fraction of all polls — visible without
+    arithmetic), frames by message type, dispatched/dropped sensor events,
+    HID reports by kind, and Bluetooth connects/disconnects."""
+    src = sketch_source()
+    code = sketch_code()
+    assert "SKYSTATE health uptime_ms=" in src
+    assert "HEALTH_INTERVAL_MS = 2000" in src
+    body = function_body("print_health_status")
+    for token in ("Skywriter.polls", "Skywriter.ts_low_polls",
+                  "Skywriter.short_reads", "Skywriter.frames_sensor_data",
+                  "Skywriter.frames_status", "Skywriter.frames_firmware",
+                  "Skywriter.frames_other", "ev_position", "ev_touch",
+                  "ev_gesture", "ev_airwheel", "ev_dropped", "hid_pointer",
+                  "hid_button", "hid_wheel", "hid_key", "hid_media",
+                  "ble_connects", "ble_disconnects"):
+        assert token in body, f"the health line must include {token}"
+    # The two shares are computed, not left as raw counts (P4.0a T5).
+    assert body.count("100.0f *") == 2
+    # The print runs from loop() on the 2 s gate.
+    loop_body = function_body("loop")
+    assert "print_health_status(now)" in loop_body
+    assert loop_body.index("HEALTH_INTERVAL_MS") < \
+        loop_body.index("print_health_status(now)"), (
+        "the 2 s gate must guard the health print")
+
+
+def test_the_200hz_sensor_path_never_prints():
+    """P3.22: the sensor callbacks only increment counters — the health
+    print is loop()'s job. (The per-link-loss drop notice is a separate,
+    deliberate one-shot line.)"""
+    for name in ("on_sensor_xyz", "on_sensor_touch", "on_sensor_gesture",
+                 "on_sensor_airwheel"):
+        assert "Serial." not in function_body(name), (
+            f"{name} must not print (200 Hz path)")

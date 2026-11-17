@@ -6,8 +6,18 @@
 
 int g_digital_read_value = 1;
 
-void pinMode(uint8_t, uint8_t) {}
-void digitalWrite(uint8_t, uint8_t) {}
+std::vector<PinAction> g_pin_actions;
+
+void g_pin_actions_clear() {
+  g_pin_actions.clear();
+}
+
+void pinMode(uint8_t pin, uint8_t mode) {
+  g_pin_actions.push_back({0, pin, mode});
+}
+void digitalWrite(uint8_t pin, uint8_t val) {
+  g_pin_actions.push_back({1, pin, val});
+}
 int digitalRead(uint8_t) {
   return g_digital_read_value;
 }

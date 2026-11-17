@@ -357,14 +357,7 @@ docker run -it --rm \
 - [x] W7 Dry-run the loop: `RALPH_MAX_ITER=1 docker run … skywriter-dev
       bash ralph.sh` — confirm the agent commits, logs land in `logs/`, marker
       files stop the loop. Fix any friction found.
-- [ ] W8 Ledger housekeeping (agent-doable; found in the 2026-11-08 review):
-      (a) the P3.17b Done entry still reads "commit `<HASH>`" — replace it with
-      the real commit hash of that change (find it with `git log`), since the
-      file forbids placeholders; (b) the Done section lists the P3.1 entry and
-      its "Environment note discovered by P3.1" twice — keep one copy of each,
-      preferring the wording that matches the current harness in `tests/README.md`;
-      (c) confirm `bash run_tests.sh` stays green and no `<HASH>` placeholder
-      remains in this file.
+- [x] W8 → done, moved to the Done section below.
 
 ## Phase 3 — Implementation (order is deliberate: test harness first)
 
@@ -934,7 +927,9 @@ of them is a checkbox the loop can pick up:
   34 % RAM — unchanged, the handler is small).
 
 - P3.17b — the pairing-bond persistence question is resolved (commit
-  `<HASH>`), and the resolution **refutes** P3.17's RAM-only assumption — a
+  `5553de4` — the loop's automatic snapshot commit, which carried the
+  otherwise-uncommitted P3.17b work), and the resolution **refutes** P3.17's
+  RAM-only assumption — a
   genuinely wrong belief in the ledger that the hardware loop was about to
   inherit. In plain language: when a phone or computer "pairs" (establishes
   a trusted wireless relationship) with the controller and later pairs
@@ -2028,49 +2023,13 @@ of them is a checkbox the loop can pick up:
   should either merge `ralph-dry-run` into `pico-ble` when the dry-run
   phase is complete, or run
   `git push --set-upstream origin ralph-dry-run` once.
-- P3.1 — fixture-replay harness skeleton landed (this commit): `tests/` is a
-  pytest package picked up automatically by `run_tests.sh`'s existing
-  `fixture_replay` check. Parts (see `tests/README.md` for the full map):
-  - `runner.py` — driver-agnostic runner: manifest scenario → frames replayed
-    in order into a **fresh decoder state**; `time_gap_ms` is applied on a
-    **VirtualClock** (`virtual_clock.py`) with zero wall-clock sleeping, once
-    between consecutive frames and once after the last frame so a later
-    mapping adapter can evaluate timed outcomes (release-by-silence).
-  - `adapters_python.py` — Python driver adapter: imports
-    `library/skywriter/__init__.py` with mocked hardware (same verification as
-    `library/test.py`), registers capture handlers on the driver's own
-    callback globals (bypassing `setup()` so no bus thread starts), mirrors
-    `_do_poll`'s message-ID dispatch and feeds the **payload** (frame minus
-    the 4-byte header) per the manifest convention, then records whatever the
-    decoder emits. The driver's wall-clock `millis()` is redirected onto the
-    VirtualClock so touch repeat-limiting is simulated time.
-  - `adapters_cpp.py` + `cpp/` — C++ decoder adapter: the *real* Arduino
-    driver (`arduino/Skywriter/skywriter.cpp`) compiled as a host program
-    behind minimal `Arduino.h`/`Wire.h` shims (`tests/cpp/`), driven through
-    its genuine `poll()` code path once per fed frame. One process per
-    scenario keeps decoder state fresh; the binary is hash-cached in
-    `tests/build/` (gitignored) so repeated runs don't recompile.
-  - `test_harness.py` — 11 meta-tests: manifest/frame integrity, every
-    scenario replays on both adapters, fresh-state identity on reruns,
-    simulated-gap accounting, VirtualClock non-sleeping, plus today-true
-    plumbing pins (F01 position values on both drivers, flick W→E dispatch,
-    tap dispatch). Assertions deliberately cover only behaviour that already
-    matches the spec — per-scenario spec assertions (AC-MAP-01…06) land with
-    P3.2 + the decoder fixes P3.3–P3.11, keeping `run_tests.sh` red→green
-    per fix, never red-by-design.
-- Environment note discovered by P3.1 (this commit): the Alpine container has
-  **no host C++ compiler and no sudo/root** (`g++`, `clang++`, apk tools all
-  absent — only the ARM cross-compiler inside the rp2040 arduino core is
-  shipped, which cannot build host binaries). Resolved without root:
-  `pip install --user --break-system-packages ziglang` — the `ziglang` PyPI
-  wheel is a complete C++ toolchain (`python3 -m ziglang c++ …`) and works on
-  this musl image (verified: compiled a test binary, exit code checked).
-  `tests/adapters_cpp.py` resolves the compiler as `g++`/`c++` → `zig` on
-  PATH → `python3 -m ziglang c++`, and fails loudly with install instructions
-  if none is found (never a silent skip). The Dockerfile now also installs
-  `g++ musl-dev` for future image rebuilds; **not yet verified by an actual
-  image rebuild** (docker is host-only) — spread this verification to the
-  next host-side docker-touching session. The pip ziglang install is
-  user-local and dies with the current container; until the image is
-  rebuilt, a fresh container needs the `pip install` above before
-  `run_tests.sh`.
+- W8 — ledger housekeeping done (this commit): (a) the P3.17b Done entry's
+  "commit `<HASH>`" placeholder is now the real hash `5553de4` (the
+  automatic-snapshot commit that carried the P3.17b work — found via
+  `git log -S "FLASH-BACKED"`), and (b) the duplicated P3.1 entry and
+  "Environment note discovered by P3.1" at the bottom of the Done section
+  were removed (one copy of each remains, the wording that matches the
+  current harness: `tests/build/` is covered by the tree-wide `build/`
+  .gitignore rule, so both phrasings were true — the earlier copy was
+  kept). (c) verified: no `<HASH>` placeholder remains in this file and
+  `bash run_tests.sh` stays green.

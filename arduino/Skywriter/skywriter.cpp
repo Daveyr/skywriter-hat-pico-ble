@@ -17,7 +17,16 @@ void _SkyWriter::begin(unsigned char pin_xfer, unsigned char pin_reset){
 }
 
 void _SkyWriter::poll(){
+  // Health counters (fix item P3.22, hardware P4.0a T5): public state, like
+  // `last_gesture`, so any sketch can read them. polls counts EVERY call;
+  // ts_low_polls counts the calls where the sensor's data-ready (transfer,
+  // TS) line was low, i.e. an actual transfer started; short_reads counts
+  // the transfers whose read returned fewer than the 4 header bytes (the
+  // H1 failed-read path). The 200 Hz hot path only increments; it never
+  // prints.
+  this->polls++;
   if (!digitalRead(this->xfer)){
+    this->ts_low_polls++;
     pinMode(this->xfer, OUTPUT);
     digitalWrite(this->xfer, LOW);
     
@@ -39,6 +48,16 @@ void _SkyWriter::poll(){
       d_ident = Wire.read();
     }
     else{
+      // Failed read (fix item P3.23, hypothesis H1): fewer than the 4
+      // header bytes arrived. The early return used to leave the transfer
+      // line driven LOW — the sensor's data buffers stay pinned, nothing
+      // new ever arrives, and the controller looks alive while producing
+      // no input at all (hardware session 3's symptom, P4.0a). Release on
+      // every exit path now, exactly as the Python driver's try/finally
+      // has done since P3.11d.
+      this->short_reads++;
+      digitalWrite(this->xfer, HIGH);
+      pinMode(this->xfer, INPUT_PULLUP);
       return;
     }
     
@@ -57,21 +76,35 @@ void _SkyWriter::poll(){
   
     switch(d_ident){
       case 0x91:
+        this->frames_sensor_data++;
         this->handle_sensor_data(this->command_buffer);
         break;
       case 0x15:
         // System_Status acknowledge, decoded as a control event (P3.11b).
+        this->frames_status++;
         this->handle_status_info(this->command_buffer);
         break;
       case 0x83:
         // Fw_Version_Info report, decoded as a control event (P3.11b).
+        this->frames_firmware++;
         this->handle_firmware_info(this->command_buffer);
+        break;
+      default:
+        // An unknown message identity is worth counting too: a stream of
+        // these means the framing is off (the P4.0a counters' "other" row).
+        this->frames_other++;
         break;
     }
     
     
+    // Release the transfer line after a completed transfer (fix item
+    // P3.23, hypothesis H2): the pull-up is RESTORED on release, exactly
+    // as the Python driver releases (GPIO.IN with PUD_UP) — a loose or
+    // disconnected TS wire must read consistently high, not at random
+    // (this reopens and settles the P3.19 pin-mode decision: the old
+    // plain-INPUT release is now INPUT_PULLUP on every exit path).
     digitalWrite(this->xfer, HIGH);
-    pinMode(this->xfer, INPUT);
+    pinMode(this->xfer, INPUT_PULLUP);
   }
 }
 
