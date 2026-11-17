@@ -2120,13 +2120,3 @@ of them is a checkbox the loop can pick up:
   should either merge `ralph-dry-run` into `pico-ble` when the dry-run
   phase is complete, or run
   `git push --set-upstream origin ralph-dry-run` once.
-- W8 — ledger housekeeping done (this commit): (a) the P3.17b Done entry's
-  "commit `<HASH>`" placeholder is now the real hash `5553de4` (the
-  automatic-snapshot commit that carried the P3.17b work — found via
-  `git log -S "FLASH-BACKED"`), and (b) the duplicated P3.1 entry and
-  "Environment note discovered by P3.1" at the bottom of the Done section
-  were removed (one copy of each remains, the wording that matches the
-  current harness: `tests/build/` is covered by the tree-wide `build/`
-  .gitignore rule, so both phrasings were true — the earlier copy was
-  kept). (c) verified: no `<HASH>` placeholder remains in this file and
-  `bash run_tests.sh` stays green.
