@@ -71,7 +71,7 @@ Each row is a test or observation, its result, and the plan item it belongs to.
 | Sensor supply on pin 36 (3V3 OUT) | Confirmed from the Raspberry Pi Pico W pinout. PASS | P4.0a T0 |
 | Each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9, RESET GP10) | PASS: continuity through the wires to the correct GPIO | P4.0a T0 |
 | Bridges between signal wires | PASS: no solder bridging | P4.0a T0 |
-| External pull-up resistors | Soldered on the veroboard, each between 3V3 and its signal's rail: 4.7 kΩ on SDA and SCL; 10 kΩ on TRFR and RESET. Values are nominal, not yet measured (section 5, step 1) | P4.0a H3 |
+| External pull-up resistors | Soldered on the veroboard, each between 3V3 and its signal's rail. Measured 2026-11-17: SDA 4.69 kΩ, SCL 4.67 kΩ, TRFR 10 kΩ, RESET 10 kΩ. PASS: the measured values match the fitted values (see section 6 for what is still to record) | P4.0a H3 |
 | Sensor-end 3V3 reading | 3.3 V at the end of the supply wire. PASS | P4.0a T1 |
 | Full serial log, session 3 | NOT CAPTURED | P4.0a T3 |
 | `hid-recorder` or `evtest` on the laptop, session 3 | NOT RUN | P4.0a T4 |
@@ -107,11 +107,12 @@ Each row is a test or observation, its result, and the plan item it belongs to.
 
 ## 5. Human steps before the next hardware loop
 
-Steps 1 and 2 of the earlier list have passed (see section 3). Remaining:
+Steps 1 and 2 of the earlier list have passed (see section 3). Steps:
 
-1. Power off. Multimeter, resistance: SDA to 3V3 and SCL to 3V3 should read
-   about 4.7 kΩ; TRFR and RESET to 3V3 about 10 kΩ. Measure at the veroboard
-   pads, so the reading includes the joints. Record the measured values.
+1. DONE 2026-11-17: pull-up resistance measured with the multimeter. SDA to
+   3V3: 4.69 kΩ. SCL to 3V3: 4.67 kΩ. TRFR to 3V3: 10 kΩ. RESET to 3V3: 10 kΩ.
+   Still to record: the exact TRFR and RESET figures, and whether the board was
+   powered off during the measurement.
 2. After the loop lands P3.22 and P3.23, flash the diagnostic build from the
    `pico-arduino` folder with `./flash.sh SkywriterController`. Plain
    `./flash.sh` fails, because it looks for a sketch named `pico-arduino`.
@@ -132,8 +133,9 @@ The user's answers to the open questions:
 - Each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9, RESET
   GP10), and there is no solder bridging.
 - Pull-up resistors are soldered on the veroboard, each between 3V3 and its
-  signal's rail: 4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET. These values
-  are nominal, not measured. Section 5, step 1 records the measured values.
+  signal's rail. Measured: SDA 4.69 kΩ, SCL 4.67 kΩ, TRFR 10 kΩ, RESET 10 kΩ.
+  The SDA and SCL values match the 4.7 kΩ fitted; the TRFR and RESET values
+  match the 10 kΩ fitted. Section 5, step 1 has the record.
 - The 3.3 V reading at the sensor end of the supply wire is 3.3 V.
 - The "N" and "select all": the hand was on the sensor's north side, and the
   "select all" looked like Ctrl+A when the fingers were at the sensor's edges.

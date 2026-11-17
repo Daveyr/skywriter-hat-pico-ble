@@ -521,9 +521,9 @@ item names what needs the Pico W plugged in.
         between rails; the sensor is supplied from pin 36 and reads 3.3 V at the
         sensor end of the supply wire; the lines idle near 3.3 V with the
         multimeter on the 3V3 reference. The pull-up resistors are soldered on
-        the veroboard between 3V3 and each signal's rail: 4.7 kΩ on SDA and SCL,
-        10 kΩ on TRFR and RESET (nominal values; measured values pending, see
-        HW_REPORT.md section 5). These checks do not show joint quality or the
+        the veroboard between 3V3 and each signal's rail. Measured 2026-11-17
+        with the multimeter: SDA 4.69 kΩ, SCL 4.67 kΩ, TRFR 10 kΩ, RESET 10 kΩ
+        (see HW_REPORT.md section 5, step 1). These checks do not show joint quality or the
         sensor's signal behaviour, so the wiring is not eliminated.
       - Input has typically been absent since the first breadboard attempt. The
         known exceptions are the session 2 clicks and the "N" of 2026-11-17, so
@@ -793,8 +793,9 @@ of them is a checkbox the loop can pick up:
     high); SDA, SCL and RESET near 0 V difference (idle high).
   - Each signal reaches its intended Pico pin; no solder bridges.
   - Pull-up resistors: soldered on the veroboard between 3V3 and each signal's
-    rail: 4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET (nominal; measure at
-    the veroboard pads, power off, and record the values).
+    rail. Measured 2026-11-17: SDA 4.69 kΩ, SCL 4.67 kΩ, TRFR 10 kΩ, RESET
+    10 kΩ. The exact TRFR and RESET figures and the power state during the
+    measurement are still to be recorded.
   - Sensor-end supply: 3.3 V at the end of the supply wire (from pin 36).
   - The "N" and "select all": the hand was on the sensor's north side; the
     "select all" looked like Ctrl+A when the fingers were at the sensor's
