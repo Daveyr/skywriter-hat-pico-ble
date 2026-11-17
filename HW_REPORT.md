@@ -11,8 +11,9 @@ Plain-language summary: the Skywriter sensor is wired to a Raspberry Pi Pico W
 keyboard and mouse. The laptop pairs with it, but since the wires were moved
 from a breadboard to a soldered board (veroboard), almost no input reaches the
 laptop. The wiring now checks out on every static test so far (pins, bridges,
-rails, pull-up resistors, supply voltage). The cause is not yet known. Some
-failures are code faults the loop can fix; the rest needs a person at the board.
+rails, pull-up resistors, supply voltage), so it is no longer the leading
+suspect, though it is not ruled out. The cause is not yet known. Some failures
+are code faults the loop can fix; the rest needs a person at the board.
 
 ## 1. What the loop should do
 
@@ -70,7 +71,7 @@ Each row is a test or observation, its result, and the plan item it belongs to.
 | Sensor supply on pin 36 (3V3 OUT) | Confirmed from the Raspberry Pi Pico W pinout. PASS | P4.0a T0 |
 | Each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9, RESET GP10) | PASS: continuity through the wires to the correct GPIO | P4.0a T0 |
 | Bridges between signal wires | PASS: no solder bridging | P4.0a T0 |
-| External pull-up resistors (nominal values from the user, not measured) | Soldered resistors: 4.7 kΩ on SDA and SCL; 10 kΩ on TRFR and RESET. Location to confirm (see section 6) | P4.0a H3 |
+| External pull-up resistors | Soldered on the veroboard, each between 3V3 and its signal's rail: 4.7 kΩ on SDA and SCL; 10 kΩ on TRFR and RESET. Values are nominal, not yet measured (section 5, step 1) | P4.0a H3 |
 | Sensor-end 3V3 reading | 3.3 V at the end of the supply wire. PASS | P4.0a T1 |
 | Full serial log, session 3 | NOT CAPTURED | P4.0a T3 |
 | `hid-recorder` or `evtest` on the laptop, session 3 | NOT RUN | P4.0a T4 |
@@ -85,10 +86,10 @@ Each row is a test or observation, its result, and the plan item it belongs to.
   use 78 and 79). Fix code and specs together. Confirm in the spec before
   changing it.
 - **F2 — no input reaches the laptop since session 3 (P4.0a).** Not solvable by
-  code alone. The wiring checks so far (pins, bridges, rails, supply voltage,
-  pull-up resistors) all pass, so the wiring fault is less likely than it was
-  on 2026-11-17. Still open: solder joint quality (cold or cracked joints do
-  not show on a static test) and the sensor's signal behaviour. Other causes,
+  code alone. The wiring is no longer the leading suspect: the static checks
+  (pins, bridges, rails, supply voltage, pull-up resistors) all pass. It is not
+  eliminated, because solder joint quality (cold or cracked joints) and the
+  sensor's signal behaviour cannot be shown by a static test. Other causes,
   listed in fix_plan.md P4.0a: the transfer line left low after a failed read
   (H1), the sensor restarting (H4), the Pico resetting (H5), or events dropped
   while unconnected (H6). The loop does the code parts: P3.22 (counters) and
@@ -121,14 +122,22 @@ Steps 1 and 2 of the earlier list have passed (see section 3). Remaining:
    any, changes the counters.
 6. Write the results back into this file, or a new one, before the next loop.
 
-## 6. Open items from the 2026-11-17 answers
+## 6. Answers from 2026-11-17
 
-- The pull-up resistor values are nominal (from the user's description), not
-  measured. Step 1 of section 5 measures them.
-- The user wrote the resistors are "soldered to the breadboard". Confirm they
-  are soldered on the veroboard and connected to the same wires. If they are
-  still on the breadboard, they are not in the circuit, and the pull-up check
-  in section 3 must be redone.
+The user's answers to the open questions:
+
+- Multimeter reference: the black probe was on 3V3. TRFR read exactly 0 V
+  difference, and SDA, SCL and RESET read near 0 V difference. So every line
+  sits at about 3.3 V, which is the idle high state.
+- Each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9, RESET
+  GP10), and there is no solder bridging.
+- Pull-up resistors are soldered on the veroboard, each between 3V3 and its
+  signal's rail: 4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET. These values
+  are nominal, not measured. Section 5, step 1 records the measured values.
+- The 3.3 V reading at the sensor end of the supply wire is 3.3 V.
+- The "N" and "select all": the hand was on the sensor's north side, and the
+  "select all" looked like Ctrl+A when the fingers were at the sensor's edges.
+  The cause is not known. It is recorded as F5.
 
 ## 7. Must not be done by the loop
 

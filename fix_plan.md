@@ -515,6 +515,16 @@ item names what needs the Pico W plugged in.
         before 2026-11-16). This is the only physical change reported. A
         veroboard joint can bridge two neighbouring pins, cold or crack, or put
         a wire on the wrong pin, and breadboard contacts never did that.
+      - Static wiring checks, all passing (2026-11-17, reported by the user):
+        each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9,
+        RESET GP10); no solder bridges between signal wires; no bridging
+        between rails; the sensor is supplied from pin 36 and reads 3.3 V at the
+        sensor end of the supply wire; the lines idle near 3.3 V with the
+        multimeter on the 3V3 reference. The pull-up resistors are soldered on
+        the veroboard between 3V3 and each signal's rail: 4.7 kΩ on SDA and SCL,
+        10 kΩ on TRFR and RESET (nominal values; measured values pending, see
+        HW_REPORT.md section 5). These checks do not show joint quality or the
+        sensor's signal behaviour, so the wiring is not eliminated.
       - Input has typically been absent since the first breadboard attempt. The
         known exceptions are the session 2 clicks and the "N" of 2026-11-17, so
         the fault looks intermittent rather than total.
@@ -525,10 +535,13 @@ item names what needs the Pico W plugged in.
       - The sketch's sensor acknowledgement retries each command up to 10 times
         and always releases the transfer line, so a bus that is only sometimes
         reliable can still pass boot (the Bluetooth link came up).
-      Candidate causes (none confirmed). Ranking after 2026-11-17: H3 is the
-      leading suspect (a physical change, intermittent, unchanged by an unplug).
-      H1 turns any failed read into a silent stall whatever the root cause, so
-      P3.23 is needed either way. H2 is present from boot in the code.
+      Candidate causes (none confirmed). Ranking revised 2026-11-17 after the
+      static wiring checks passed: wiring (H3) is no longer the leading
+      suspect, but it is not eliminated (joint quality and a fault that shows
+      only under flexing cannot be seen statically). No single cause leads now;
+      the firmware and sensor-side causes (H1, H2, H4) need the counters (P3.22)
+      to separate them. H1 turns any failed read into a silent stall whatever
+      the root cause, so P3.23 is needed either way.
       - H1 — transfer line left LOW (code-traced). In
         `arduino/Skywriter/skywriter.cpp` `poll()`, a read that returns fewer
         than 4 header bytes takes an early `return` (lines 41–43) before the
@@ -547,14 +560,17 @@ item names what needs the Pico W plugged in.
         transfer (library line 74). The Python driver restores the pull-up on
         release (`library/skywriter/__init__.py`, line 534). So a loose or
         disconnected TS wire reads at random and can trigger the H1 path. This
-        reopens the P3.19 decision.
+        reopens the P3.19 decision. The 10 kΩ pull-up soldered from TRFR to 3V3
+        (2026-11-17) holds the line high while its joint is good, so H2 is less
+        likely unless that joint fails.
       - H3 — wiring after the veroboard move: a solder bridge between
         neighbouring pins, a cold or cracked joint, a wire on the wrong pin, or
-        no external pull-up on SDA and SCL. The Pico's I2C library turns on the
-        chip's own pull-ups, which are weak (tens of kilohms; SDA at
-        `Wire.cpp` line 129). Whether external pull-ups exist, and where, is not
-        yet known. Now the leading suspect: the symptoms are intermittent, an
-        unplug changed nothing, and the wiring is what changed.
+        missing pull-ups. Demoted 2026-11-17: pins, bridges and rails pass the
+        static checks, and the external pull-ups are soldered on the veroboard
+        (4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET). The Pico's own I2C
+        pull-ups are weak (tens of kilohms; SDA at `Wire.cpp` line 129), so the
+        external ones matter. Not eliminated: a cold or cracked joint passes a
+        static check and shows only under flexing (T6).
       - H4 — the sensor restarted and lost its configuration. The sketch sends
         the four configuration commands once, from `setup()`, and never again,
         so a power or reset-line glitch would leave the sensor unconfigured.
@@ -770,16 +786,20 @@ of them is a checkbox the loop can pick up:
      slow swipe and one tap per zone.
   5. After P3.22 and P3.23 are implemented, flash the diagnostic build with
      `pico-arduino/flash.sh`, keep the monitor running, then run T5 and T6.
-  Do not change the wiring again until steps 1 and 2 are recorded.
-- Open questions for the user (2026-11-17), needed before T0 and T1:
-  - Is there a multimeter, ideally with continuity beep and MIN/MAX?
-  - Did the breadboard hold anything besides wires (resistors, capacitors, or
-    parts on the sensor board)? In particular, were there pull-up resistors on
-    SDA and SCL, and are there any on the veroboard now?
-  - Is the sensor supplied from the Pico's 3.3 V pin (physical pin 36) or from
-    the 5 V pin (pin 40)?
-  - When the "N" appeared, was a hand near the sensor's north side? What was the
-    "select all": did the text get selected by itself, or was Ctrl+A pressed?
+  Steps 1 and 2 passed on 2026-11-17 (static checks, see the P4.0a answers
+  above). Do not change the wiring again until steps 3 and 4 are recorded.
+- Answers recorded 2026-11-17 (HW_REPORT.md section 6 holds the detail):
+  - Multimeter reference: probe on 3V3. TRFR exactly 0 V difference (idle
+    high); SDA, SCL and RESET near 0 V difference (idle high).
+  - Each signal reaches its intended Pico pin; no solder bridges.
+  - Pull-up resistors: soldered on the veroboard between 3V3 and each signal's
+    rail: 4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET (nominal; measure at
+    the veroboard pads, power off, and record the values).
+  - Sensor-end supply: 3.3 V at the end of the supply wire (from pin 36).
+  - The "N" and "select all": the hand was on the sensor's north side; the
+    "select all" looked like Ctrl+A when the fingers were at the sensor's
+    edges. The cause is not known. Hypothesis for P3.21: a modifier bit or a
+    stuck key in the keyboard report.
 - Do not delete `READY_FOR_HW` by hand to restart the loop. The loop would pick
   P4.0a first, and P4.0a needs the board. The loop restarts only after
   `HW_REPORT.md` exists (P4.4).
