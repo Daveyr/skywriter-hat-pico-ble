@@ -251,6 +251,61 @@ docker run -it --rm \
    `READY_FOR_HW` marker is written in the repository root listing
    precisely the Phase-4 tests (P4.1–P4.6) and their pass/fail
    criteria — the outer hardware loop takes over from here.
+   Update (2026-11-08, hardware session 1 — run by a person on the host, not
+   by the loop). Results reported so far:
+   - Sensor bus: the gesture sensor is detected on the I2C (Inter-Integrated
+     Circuit, the two-wire sensor bus). Partial P4.1 evidence only — the
+     serial boot lines were reported as all present (sensor ready,
+      HID started, pace line on connect), but no capture file exists yet and
+      frame streaming is not recorded.
+   - Bluetooth scan: `Skywriter HID` is listed. Partial AC-BLE-01 (name
+     visible; "exactly one instance" not yet checked).
+   - Pairing: a Linux (BlueZ) laptop paired successfully. Partial AC-BLE-03 (pairing only;
+     battery at 100 % and the Device Information reads are not yet checked).
+   - Use: the laptop reacted to the sensor, but the behaviour was haphazard.
+     Reported symptoms: the cursor jumped or teleported, moved the wrong way
+     or along the wrong axis, and keyboard and media keys fired. Keyboard
+     presses also typed letters. Traced in the code: the Page Up and Page
+     Down taps send the wrong key codes, which the keyboard driver types as
+     letters — tracked as P3.21. The jumps, direction and media-key symptoms
+     are the subject of the gate item P4.0. The device is NOT usable as a
+     mouse yet.
+   - Method: manual only (no scripts); the sketch was built and flashed with
+      `pico-arduino/flash.sh`.
+    - Not yet run: the AC-BLE-02 Report Map check (the laptop's device list was
+      not checked, so "one device, mouse and keyboard" is unconfirmed), the
+      power-cycle reconnect
+     (AC-BLE-06), the latency and report-rate probe (AC-BLE-04), link-loss
+     advertising (AC-BLE-05), the multi-OS smoke test (AC-BLE-08) and real-frame
+     capture (P4.6). No `HW_REPORT.md` was written, so `READY_FOR_HW` stays in
+     place.
+    Update (2026-11-09, hardware session 2 — serial monitor capture, no code
+    change). The monitor was attached after boot, so the boot lines are not in
+    the log. Seen: `SKYWRITER-HID sensor_firmware valid=0xAA version=1.1.18`,
+    the link connecting with `pace report_interval_ms=15`, and `ble_resync` /
+    `ble_connected` printed twice with no `ble_dropped` between them (open, see
+    P4.3). The user reported that only single and double clicks appeared to
+    work.
+    Update (2026-11-16, hardware session 3 — after the permanent rewiring; the
+    rewiring date was not recorded). The wires were secured to stop loose
+    connections, which is the only change reported. The Bluetooth link is up
+    (the laptop shows battery level and signal strength) and the serial monitor
+    shows no error, but NO input of any kind reaches the laptop: no pointer
+    movement, click, tap, scroll, key or media key. Session 2 still had clicks
+    working, so this is a total loss of input, not the haphazard behaviour of
+    sessions 1–2. It blocks P4.0 and is logged as the first Phase-4 gate, P4.0a.
+    No code was changed in this update.
+    Update (2026-11-17, hardware session 3 follow-up — no code change). All
+    sensor-to-Pico wires have moved from the breadboard to veroboard (made on or
+    before 2026-11-16; exact date not recorded). Unplugging the Pico changed
+    nothing, and the firmware has not been reflashed since session 2. Input has
+    typically been absent since the first breadboard attempt, with two known
+    exceptions: session 2's clicks, and an "N" that appeared in a text box on
+    2026-11-17 (a north tap typed as the letter N — the P3.21 defect). So the
+    fault is intermittent, not a total loss. The user also reported a "select
+    all" at the same moment; its cause is not known. No oscilloscope or logic
+    analyser is available, so the firmware counters (P3.22) become the main
+    instrument. The revised diagnosis is in P4.0a.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -302,6 +357,14 @@ docker run -it --rm \
 - [x] W7 Dry-run the loop: `RALPH_MAX_ITER=1 docker run … skywriter-dev
       bash ralph.sh` — confirm the agent commits, logs land in `logs/`, marker
       files stop the loop. Fix any friction found.
+- [ ] W8 Ledger housekeeping (agent-doable; found in the 2026-11-08 review):
+      (a) the P3.17b Done entry still reads "commit `<HASH>`" — replace it with
+      the real commit hash of that change (find it with `git log`), since the
+      file forbids placeholders; (b) the Done section lists the P3.1 entry and
+      its "Environment note discovered by P3.1" twice — keep one copy of each,
+      preferring the wording that matches the current harness in `tests/README.md`;
+      (c) confirm `bash run_tests.sh` stays green and no `<HASH>` placeholder
+      remains in this file.
 
 ## Phase 3 — Implementation (order is deliberate: test harness first)
 
@@ -353,12 +416,244 @@ in Phase 4 on hardware
 - [x] P3.19 → done, moved to the Done section below.
 - [x] P3.20 → done, moved to the Done section below (the `READY_FOR_HW`
       marker's Phase-4 test list is the ledger for the outer loop).
+- [ ] P3.21 **Keyboard taps typed letters instead of Page Up / Page Down
+      (found in hardware session 1, 2026-11-08)**: the touch north and south
+      taps should press the keyboard Page Up and Page Down keys (§6), but the
+      laptop received typed letters. Two causes, both traced in the code:
+      (1) Wrong usage numbers. In the USB HID Usage Tables keyboard page, Page
+      Up is 0x4B (75) and Page Down is 0x4E (78); 0x4F (79) is Right Arrow. The
+      spec (`specs/hid_mapping.md` §6), the mapper constants
+      (`SkywriterHIDMapper.h`), the test grammar and manifest, and the test
+      comments all use 78 for Page Up and 79 for Page Down. Cross-check in this
+      repo: the Arduino BLE core's key table gives `KEY_PAGE_UP` 0xD3 = 136 + 75,
+      `KEY_PAGE_DOWN` 0xD6 = 136 + 78, `KEY_RIGHT_ARROW` 0xD7 = 136 + 79.
+      (2) Wrong call path. `SkywriterController.ino` (the sink's
+      `keyboardPress`/`release`) passes the raw usage to
+      `KeyboardBLE.press(uint8_t)`. The core's `HID_Keyboard::press` treats
+      values 0–127 as ASCII characters (usage 78 → "N", 79 → "O") and values
+      136 and up as non-printing keys (usage = value − 136). Fix plan
+      (agent-doable, verifiable offline): correct the usage constants to 75 and
+      78 with a dated revision note in `specs/hid_mapping.md` §6 and the
+      manifest; send keyboard usages through the non-printing range in the
+      sink (`usage + 136`, or the core's `KEY_PAGE_UP` / `KEY_PAGE_DOWN`) for
+      both press and release; update every place that quotes 78/79 (grep for
+      `HID_USAGE_PAGE_`, `KEYBOARD_KEYS`, `_KEYBOARD_KEY_BY_USAGE`, "0x4E",
+      "0x4F"); add source pins in `tests/test_firmware_sketch.py` that no raw
+      usage reaches `press()`/`release()`. This is a defect in the spec's
+      numbers, not a driver deviation: do NOT add a `specs/README.md` deviation
+      row (the harness treats every row as live); record the correction in the
+      spec revision note and this item's Done entry. Verification:
+      `bash run_tests.sh` green; on hardware, a north tap gives Page Up and a
+      south tap gives Page Down, with no letters (checked in P4.0 / P4.5).
+      Observed again 2026-11-17: an "N" appeared in a text box after a north
+      tap (raw usage 78 typed as ASCII "N", part (2) above). The symptom is real
+      on the board, and it is currently the only sign of input at all.
+- [ ] P3.22 **Health counters in the controller sketch (loop-doable; needed
+      by P4.0a T5)**: a status line every 2 s with: uptime in ms (a reset shows
+      as a drop to zero), sensor reads started, reads that returned fewer than
+      4 header bytes (the H1 path), the transfer-line level seen at each poll,
+      frames by message type (sensor data, status, firmware, other),
+      position-valid, touch, gesture and AirWheel events, events dropped while
+      unconnected, HID reports sent by kind (pointer, button, wheel, key,
+      media), and connects and disconnects. The read and transfer-line counters
+      live in the shared library (`arduino/Skywriter/`) as public state, like
+      `last_gesture`, so the examples still compile. The 200 Hz path only
+      increments counters; it never prints. Verified by `bash run_tests.sh`
+      green, a source-level pin in `tests/test_firmware_sketch.py`, and one
+      captured status line on the board (P4.0a T5).
+      Priority raised 2026-11-17: with no oscilloscope or logic analyser, these
+      counters are the only view of the transfer line and the failed reads over
+      time. Build this first, and include the two shares (short reads and
+      TS-low polls as a fraction of all polls) so they are visible without
+      arithmetic.
+- [ ] P3.23 **The Arduino `poll()` must always release the transfer line
+      (loop-doable: test first; hardware confirmation in P4.0a)**: fix H1 in
+      `arduino/Skywriter/skywriter.cpp` by releasing the transfer (TS) line on
+      the short-read `return` (lines 41–43) as well as on the normal path
+      (lines 73–74), as the Python driver does since P3.11d. Also restore the
+      internal pull-up on release, as the Python driver does (its release sets
+      the pull-up, library line 534) — this is H2 and reopens the P3.19
+      pin-mode decision; record the outcome in this item's Done entry. Test
+      first: extend the `tests/cpp` Arduino shim so `pinMode` and
+      `digitalWrite` are recorded, then add a host test that forces a short
+      read and asserts the line ends released. The test must FAIL on the current
+      code and PASS after the fix. Do not change the public callbacks or the
+      frame decoding. All examples share the library, so `run_tests.sh` must
+      still compile them. Add a row to `specs/README.md` only if a sentence in
+      `specs/` is contradicted; check first. This fix is needed whatever the
+      root cause: one failed read must not stop input for good. If P3.22 shows
+      many short reads, a bounded retry inside `poll()` (as the boot path
+      already has) becomes a separate item to decide.
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
 The container can *write* these files but only the host can *run* them. Each
 item names what needs the Pico W plugged in.
 
+- [ ] P4.0a **GATE — no input reaches the laptop since the permanent rewiring
+      (hardware session 3, 2026-11-16)**: the Bluetooth link is up and the
+      serial monitor shows no error, but no pointer movement, click, tap,
+      scroll, key or media key arrives at the laptop. Session 2 had single and
+      double clicks working, so this is a total loss of input, not a tuning
+      problem. It blocks P4.0 (its diagnosis cannot start while nothing is
+      sent), P4.5 and AC-BLE-08.
+      Known so far:
+      - The Bluetooth start-up runs only after all four sensor configuration
+        commands are acknowledged (`configure_sensor()` in
+        `SkywriterController.ino` loops forever otherwise). So on this boot the
+        I2C data wires, the sensor's power and the reset pulse on GPIO 10
+        worked.
+      - That acknowledgement check drives the transfer (TS) line itself and
+        never reads the sensor's data-ready signal, so it does NOT show that the
+        sensor's signal reaches the Pico. The data-ready input is TS on GPIO 9
+        (`SKYWRITER_PIN_TS`).
+      - Nothing in the sketch prints when a frame read fails or returns nothing,
+        so a quiet console proves nothing yet.
+      - Unplugging the Pico (a full power cycle) did not change the behaviour
+        (2026-11-17). The firmware has not been reflashed since session 2.
+      - All sensor-to-Pico wires moved from the breadboard to veroboard (on or
+        before 2026-11-16). This is the only physical change reported. A
+        veroboard joint can bridge two neighbouring pins, cold or crack, or put
+        a wire on the wrong pin, and breadboard contacts never did that.
+      - Input has typically been absent since the first breadboard attempt. The
+        known exceptions are the session 2 clicks and the "N" of 2026-11-17, so
+        the fault looks intermittent rather than total.
+      - The "N" is the P3.21 symptom on the board: a north tap sent as raw
+        keyboard code 78, which the keyboard library types as "N". So the
+        sensor-to-keyboard path worked at least once. The user also reported a
+        "select all" at the same moment; its cause is not known.
+      - The sketch's sensor acknowledgement retries each command up to 10 times
+        and always releases the transfer line, so a bus that is only sometimes
+        reliable can still pass boot (the Bluetooth link came up).
+      Candidate causes (none confirmed). Ranking after 2026-11-17: H3 is the
+      leading suspect (a physical change, intermittent, unchanged by an unplug).
+      H1 turns any failed read into a silent stall whatever the root cause, so
+      P3.23 is needed either way. H2 is present from boot in the code.
+      - H1 — transfer line left LOW (code-traced). In
+        `arduino/Skywriter/skywriter.cpp` `poll()`, a read that returns fewer
+        than 4 header bytes takes an early `return` (lines 41–43) before the
+        transfer line is released (lines 73–74). With TS held LOW the sensor's
+        data buffers stay pinned (P3.11d's note), so nothing new arrives. The
+        same early return can repeat on every later poll, so the link stays up
+        and nothing is printed. The Python driver had the same class of defect
+        and fixed it in P3.11d; the Arduino driver never got that fix. Contrast
+        the boot path:
+        it retries each acknowledgement up to 10 times and always releases the
+        line. `poll()` has no release on a failed read, so the line stays low
+        until a later read succeeds.
+      - H2 — transfer line floats (code-traced). The pin loses its pull-up
+        early: the sketch's own acknowledgement path releases it as plain INPUT
+        (sketch lines 174–175) at boot, and `poll()` does the same after every
+        transfer (library line 74). The Python driver restores the pull-up on
+        release (`library/skywriter/__init__.py`, line 534). So a loose or
+        disconnected TS wire reads at random and can trigger the H1 path. This
+        reopens the P3.19 decision.
+      - H3 — wiring after the veroboard move: a solder bridge between
+        neighbouring pins, a cold or cracked joint, a wire on the wrong pin, or
+        no external pull-up on SDA and SCL. The Pico's I2C library turns on the
+        chip's own pull-ups, which are weak (tens of kilohms; SDA at
+        `Wire.cpp` line 129). Whether external pull-ups exist, and where, is not
+        yet known. Now the leading suspect: the symptoms are intermittent, an
+        unplug changed nothing, and the wiring is what changed.
+      - H4 — the sensor restarted and lost its configuration. The sketch sends
+        the four configuration commands once, from `setup()`, and never again,
+        so a power or reset-line glitch would leave the sensor unconfigured.
+        Session 2 printed a `sensor_firmware` line mid-log, after the connection
+        lines; check whether that was a sensor restart.
+      - H5 — the Pico W itself reset (brownout from loose power wiring). A new
+        `SKYWRITER-HID boot` line shows it if the monitor stayed attached;
+        otherwise the serial connection drops.
+      - H6 — events dropped, or the laptop reading a different input device. The
+        sensor callbacks drop events while the link is closed
+        (`sensor_events_dropping_unconnected`).
+      Tests, cheapest first (human unless marked):
+      - T0 — power OFF, multimeter in continuity mode. Check each sensor pin
+        against the Pico pin the sketch uses: SDA to GP4 (physical pin 6), SCL to
+        GP5 (pin 7), TS to GP9 (pin 12), reset to GP10 (pin 14), sensor supply to
+        the 3.3 V pin (pin 36), and GND to a GND pin. Then check that no two
+        signal wires touch (a bridge) and none touches the 3.3 V or GND rail.
+        Wiggle each joint while listening: a cold joint beeps on and off. Before
+        powering the board, confirm the sensor is supplied from pin 36, not the
+        5 V pin (pin 40); the RP2040's GPIO pins are not 5 V tolerant. Write down
+        the wire list: sensor pin, Pico pin, and what changed in the rewiring.
+      - T1 — power ON, sketch running, multimeter in DC volts, one probe on one
+        pin at a time, from each signal to GND. SDA and SCL should idle near
+        3.3 V (the bus pull-ups). Reset is driven high by the Pico, so it should
+        read near 3.3 V. TS is expected to read high most of the time; a reading
+        that wanders means it is floating (H2). Near 0 V on any line = held low
+        or shorted (H1, or H3). If the meter has MIN/MAX, it may catch brief dips
+        on TS; a MIN that never leaves the high level suggests the sensor is not
+        signalling at all. Its absence proves nothing.
+      - T3 — full serial log with the logger already running when the board
+        boots (the port re-appears after a reset, so the logger must reopen it).
+        Look for the boot line, `sensor_ok`, `hid_started`, any
+        `sensor_config_failed`, a second `boot` line (H5), a mid-run
+        `sensor_firmware` line (H4), and `sensor_events_dropping_unconnected`
+        (H6).
+      - T4 — on the Linux laptop, `hid-recorder` (hid-tools) or `evtest` on the
+        Skywriter's input device, during a still hand, one slow swipe and one tap
+        per zone. No reports at all = link or host (H6). Reports present but no
+        cursor = a host-side setting. Reports present = the Pico sends, and the
+        fault is in what it sends.
+      - T5 — the main instrument now (no oscilloscope): the P3.22 counters, with
+        the monitor running. Look at short reads as a share of all polls, TS-low
+        polls as a share of all polls, frames read per second near the sensor's
+        rate, firmware frames (a new one means the sensor restarted), and uptime
+        (a reset shows as uptime dropping to zero). Needs P3.22 flashed.
+      - T6 — power ON, gently, after T0 and T1 pass, with P3.22 flashed: flex
+        each joint and wire in turn while watching T5. If the counters change at
+        the moment one joint moves, that joint is the fault.
+      Closure: the tests that apply (T0–T6) recorded with their logs in
+      `HW_REPORT.md`; one root cause named and linked to its fix (P3.23 for H1;
+      a veroboard repair for H3; a new item for H4–H5 if confirmed); then P4.0
+      resumes. Do not retune `GAIN` or `JUMP_THRESHOLD` for
+      this symptom: it is not a tuning problem.
+
+- [ ] P4.0 **GATE — haphazard pointer (first finding of hardware session 1,
+      2026-11-08)**: the Skywriter pairs and reacts, but the cursor motion,
+      clicks and scrolling seemed haphazard and incoherent, so it is not yet
+      usable as a mouse. Blocks P4.5 (feel tuning) and the AC-BLE-08 smoke
+      test. Needs a person at the board: the loop can prepare the capture
+      tooling (P4.1) but cannot close this item alone.
+      Blocked by P4.0a: since the permanent rewiring (session 3, 2026-11-16) no
+      input reaches the laptop, so none of the diagnosis steps below can run yet.
+      Reported symptoms (session 1, Linux/BlueZ laptop): the cursor jumps or
+      teleports; it moves the wrong way or along the wrong axis; keyboard and
+      media keys fire. Clicks and scrolling were not listed as symptoms. The
+      typed letters are a separate, code-traced defect (P3.21) and are not part
+      of this diagnosis.
+      Diagnosis order (evidence before changes — do not retune `GAIN` or
+      `JUMP_THRESHOLD` until the measurements show whether noise is the cause):
+      1. Serial evidence: capture the console from power-up through a 30 s
+         hand-still period and a slow 30 s swipe. Confirm `SKYSTATE sensor_ok`,
+         `hid_started`, the `pace report_interval_ms=` line on connect, and
+         no `sensor_config_failed`.
+      2. Sensor side: log the raw x/y/z values for the same two periods. Hand
+         still: are values near zero (noise) or large? Hand moving: how many
+         per-frame jumps exceed `JUMP_THRESHOLD` (8192 raw), and how many frames
+         per second arrive (expected ~200)?
+      3. Host side: count the mouse reports the laptop receives per second, and
+         check cursor direction and axis per swipe, against the sensor log.
+         Late or missing reports point at the connection-interval pacing (P3.18)
+         or at dropped movement.
+      4. Channel separation: repeat each gesture alone — pointer only, touch
+         centre (a hold holds the left button, §6), tap, AirWheel rotation
+         (scroll), flick (volume and track keys). Find which channel produces
+         the unintended behaviour.
+      Hypotheses to test, not assumptions: (a) sensor noise amplified by
+      `GAIN` 1/256 and an 8192-unit `JUMP_THRESHOLD`; (b) an x/y sign or axis
+      mismatch between sensor and mouse report; (c) an unintended touch hold
+      or auto-scroll row firing during a swipe; (d) uneven report delivery
+      from the connection-interval handling (P3.18); (e) a sensor
+      configuration or frame-read problem (P3.11b/c, P3.16) corrupting
+      positions; (f) spurious flick or circle gestures from sensor noise
+      firing the track and volume keys (the media-key symptom — check with the
+      channel-separation step: flicks alone, then a still hand).
+      Closure: the cursor moves smoothly and in the expected direction; no
+      clicks or scrolls happen unless a deliberate gesture is made; the cause
+      is recorded in `HW_REPORT.md` with the captured logs. If the firmware
+      contradicts an acceptance criterion (AC-MAP-01, AC-BLE-04), add the
+      deviation row to `specs/README.md` in the same change that fixes it.
 - [ ] P4.1 `hw/serial_probe.py` (host, needs `pyserial`): flash a test sketch
       via `pico-arduino/flash.sh`, capture the USB serial port, assert boot
       banner, sensor frame streaming and framing. Hardware-check notes:
@@ -375,9 +670,20 @@ item names what needs the Pico W plugged in.
       continues across separate read transactions of one asserted transfer
       (the fixture replay only proves the driver-side arithmetic), and that
       the RPi Linux SMBus 32-byte single-call cap is respected.
+      Session 1 (2026-11-08): the sensor was detected on the I2C bus — partial
+      evidence only. The serial boot lines were reported as all present, but
+      no capture file exists yet, so the banner, frame streaming and
+      whole-frame read checks are not yet recorded.
+      Session 3 (2026-11-16): no sensor-frame evidence since the permanent
+      rewiring; P4.0a T3 and T5 supply it.
 - [ ] P4.2 `hw/ble_hid_probe.py` (host, needs `bleak` + the host's Bluetooth
       radio): automate scan/GATT/pairing/services — target `AC-BLE-01`,
       `AC-BLE-02`, `AC-BLE-03`.
+      Session 1 (2026-11-08): the scan lists `Skywriter HID` (AC-BLE-01, name
+      part only — "exactly one instance" not yet checked); pairing with a
+      laptop succeeded (AC-BLE-03, pairing part only). Not yet checked: the
+      single composite HID device and its Report Map (AC-BLE-02), and the
+      Device Information reads and battery = 100 % (AC-BLE-03).
 - [ ] P4.3 `hw/ble_hid_probe.py` lifecycle part: latency/report-rate/
       reconnect/bond — `AC-BLE-04`, `AC-BLE-05`, `AC-BLE-06`, `AC-BLE-07`.
       Bond persistence (`AC-BLE-06`) answers `ble_hid.md` §5 open question 1.
@@ -386,13 +692,22 @@ item names what needs the Pico W plugged in.
       probe should EXPECT "bonded host reconnects after a Pico W power
       cycle WITHOUT re-pairing" to PASS; record a spec-deviation row only
       if the radio behaves otherwise.
+      Session 1 (2026-11-08): not started. The power-cycle reconnect (AC-BLE-06)
+      has not been tested; only one laptop pairing has been done.
+      Session 2 (2026-11-09): the log showed `ble_resync` and `ble_connected`
+      twice with no `ble_dropped` between. Open: a silent drop, a reset (P4.0a
+      H5), or a second connection? Check the P4.0a T3 log before changing the
+      connection handling. The same log began with `ble_dropped`,
+      `ble_advertising` and `waiting_for_host`, so a link drop happened before
+      the first visible connection.
 - [ ] P4.4 Outer loop driver `ralph_hw.sh` + `HW_REPORT.md` protocol: run the
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
       on its next start once `HW_REPORT.md` exists.
 - [ ] P4.5 Manual checks: `AC-BLE-08` multi-OS smoke test and gesture feel
       tuning (`GAIN`, `JUMP_THRESHOLD`, `TOUCH_RELEASE_MS` — record final
-      values back into `specs/hid_mapping.md` §3).
+      values back into `specs/hid_mapping.md` §3). Blocked by P4.0: tuning
+      means nothing until the pointer moves coherently.
 - [ ] P4.6 Capture real sensor frames on hardware and reconcile every fixture
       not marked `vendor`; specifically confirm the AirWheel counter
       behaviour (does a real capture cross 255→0 as the signed 8-bit model
@@ -419,6 +734,55 @@ attribute table limit).
       events and controller outputs as the Arduino implementation
       (`AC-MAP-09` applies to the port too — reuse `tests/` P3.1's
       driver-agnostic harness with a MicroPython-decoder adapter).
+
+## Manual actions (human, not loop work)
+
+The loop must skip this section. Each item needs a person or the host, so none
+of them is a checkbox the loop can pick up:
+
+- Attach the session-1 evidence: the serial console capture (the `SKYSTATE`
+  lines, from power-up and during the haphazard use), the laptop's Bluetooth
+  or mouse event log for the same period, and the laptop's operating system
+  and Bluetooth stack. Needed for P4.0 and P4.1.
+- On the Linux laptop, record the raw HID input from the Skywriter during a
+  short session (for example `hid-recorder` from hid-tools, or `evtest` on the
+  Skywriter's input device node), in three parts: a still hand, a slow swipe,
+  and one tap per zone. Attach the output. This separates pointer, key and
+  media reports for P4.0 step 3 and checks AC-BLE-02's composite report layout.
+- Install the host tools for Phase 4: `pyserial` and `bleak` (see the Phase 4
+  hardware notes in the status snapshot).
+- Make the scripts executable on the host: `chmod +x ralph.sh run_tests.sh`
+  (chmod is blocked in the container).
+- Rebuild the `skywriter-dev` image on the host and confirm the C++ compiler
+  install (`g++ musl-dev` in the Dockerfile) so `run_tests.sh` works in a fresh
+  container without the manual `pip install --user ziglang` (P3.1 environment
+  note). Retire the ziglang fallback only after that is verified.
+- Resolve the `ralph-dry-run` branch (W7b): merge it into `pico-ble`, or run
+  `git push --set-upstream origin ralph-dry-run` once.
+- Session 3 checks (2026-11-16/17), in this order, without changing the wiring
+  in between:
+  1. T0: power off, multimeter continuity check of the veroboard, with the wire
+     list and the bridge check. Confirm the sensor is supplied from pin 36.
+  2. T1: power on, multimeter DC volts on SDA, SCL, TS and reset (and MIN/MAX on
+     TS if the meter has it). Record every reading.
+  3. T3: the full serial log, with the logger running when the board boots.
+  4. T4: `hid-recorder` or `evtest` on the Linux laptop, during a still hand, one
+     slow swipe and one tap per zone.
+  5. After P3.22 and P3.23 are implemented, flash the diagnostic build with
+     `pico-arduino/flash.sh`, keep the monitor running, then run T5 and T6.
+  Do not change the wiring again until steps 1 and 2 are recorded.
+- Open questions for the user (2026-11-17), needed before T0 and T1:
+  - Is there a multimeter, ideally with continuity beep and MIN/MAX?
+  - Did the breadboard hold anything besides wires (resistors, capacitors, or
+    parts on the sensor board)? In particular, were there pull-up resistors on
+    SDA and SCL, and are there any on the veroboard now?
+  - Is the sensor supplied from the Pico's 3.3 V pin (physical pin 36) or from
+    the 5 V pin (pin 40)?
+  - When the "N" appeared, was a hand near the sensor's north side? What was the
+    "select all": did the text get selected by itself, or was Ctrl+A pressed?
+- Do not delete `READY_FOR_HW` by hand to restart the loop. The loop would pick
+  P4.0a first, and P4.0a needs the board. The loop restarts only after
+  `HW_REPORT.md` exists (P4.4).
 
 ## Done
 
