@@ -422,6 +422,46 @@ docker run -it --rm \
       duplicate-connect behaviour the ledger flagged in session 2, now
       captured with clean timing. Record it in the P4.3 log analysis;
       do not change connection handling yet.
+    Update (2026-11-19, loop iteration after HW_REPORT.md session 4 —
+    code commit `2267497`): the report's one open failure is answered.
+    - **F7 (no valid frames decode, other=100 % — P4.0a H7) — FIXED** by
+      landing both §3f items in one change: P3.25 replaces the single
+      132-byte I2C over-read with the Python driver's sized reads (read
+      exactly 26 first; only a longer message — its own Size field says
+      so — is fetched with bounded continuation reads; incomplete or
+      corrupt-Size frames are never dispatched half-read), and P3.24
+      adds the unknown-frame snapshot (first 8 frame bytes + the byte
+      count the reads actually returned) that the health line prints as
+      `other_snap=`/`other_read=`. The 132-byte Fw_Version_Info capture
+      survives through the continuations (the F17 replay stays green),
+      and the health line's transfer accounting now closes: short +
+      sensor + status + fw + other = every transfer. See the P3.24 /
+      P3.25 Done entries for the details and the red→green test
+      evidence. On hardware: flash the new build and rerun T5 — the
+      prediction is `frames sensor` climbing at roughly the poll rate,
+      `other` near zero, and pointer/touch input reaching the laptop;
+      if `other` persists, the snapshot content names the cause (its
+      four signatures are in P4.0a's update below).
+    - **F4/P4.3 note (five connect lines in 4 s, zero drops) — recorded,
+      deferred** as the report itself defers it: the sensor-side fault is
+      the gate; handle it when P4.3 runs.
+    - **Report sections 5–6 (the host-side work) — moved to P4.0a's
+      update below**: the supply-wire discriminator (with the Pico
+      running, disconnect the SENSOR end of the 3.3 V supply wire — a
+      real transfer-line-to-ground short keeps TRFR at ~0 V, a healthy
+      line floats to ~3.3 V) and the next-run checklist (T5 re-capture
+      from power-up, then the snapshot signatures, then the gesture
+      acceptance run).
+    - HW_REPORT.md is removed; its measured facts (counter captures,
+      TRFR 15.4 mV, boot captures) were already recorded in the status
+      snapshot entries above and stay there. 123 pytest tests;
+      `run_tests.sh` 4/4; all four Pico W sketches compile (22 % flash /
+      34 % RAM, unchanged).
+    - No new work items discovered. One scope decision recorded in the
+      P3.24 Done entry: the snapshot fires on every undispatched frame
+      (a superset of the item's identity-only letter) because P3.25's
+      Size validation would otherwise hide exactly the corrupt-Size
+      frames H7 produces.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -533,41 +573,8 @@ in Phase 4 on hardware
 health capture; evidence and verdict in P4.0a's 2026-11-18 update,
 new leading suspect H7)
 
-- [ ] P3.24 — Instrument the unknown frames. The P3.22 counters show
-      other=100 % but cannot show WHAT the unknown frames contain, and
-      that content is the evidence that confirms or refutes H7. In
-      `arduino/Skywriter` poll(), when a frame's identity byte (byte 3)
-      is not 0x91/0x15/0x83, store a small public snapshot alongside the
-      counters: the first 8 frame bytes (size, flags, sequence, identity
-      + 4 payload bytes) and the byte count the read actually returned
-      (`Wire.requestFrom`'s count — currently ignored; `Wire.available()`
-      gates the header). Hot-path rule unchanged (200 Hz increments
-      only — poll() stores, nothing prints). print_health_status() in
-      `pico-arduino/SkywriterController` prints the latest snapshot once
-      per health line. Predictions the snapshot must separate: the 0x91
-      identity visible but SHIFTED by a constant offset confirms H7's
-      mid-frame misalignment; all 0x00 means the sensor serves padding
-      on reads with nothing queued (then the transfer line is the liar —
-      hunt a transfer-line short with the meter, T1); all 0xFF means a
-      wedged slave (power-cycle the sensor and retest).
-- [ ] P3.25 — Port the Python driver's sized reads to the Arduino
-      driver (the H7 fix). poll() reads EXACTLY 26 bytes first, then —
-      only when the frame's own Size field (byte 0, validated
-      4 ≤ size ≤ 132) says the message is longer — fetches continuation
-      reads bounded by Size while the transfer (TS) line is still
-      asserted, mirroring the Python driver's P3.11c pattern (26 +
-      32-byte chunks, `library/skywriter/__init__.py` `_do_poll`). A
-      frame that cannot be completed is not dispatched half-read (same
-      rule as the Python driver). Dispatch only complete frames; the
-      P3.23 release rule stands on every exit path. This replaces the
-      single 132-byte request (P3.11b) whose over-read is H7's
-      mechanism — the 132-byte Fw_Version_Info capture still works via
-      the Size-field continuation, so P3.11b's goal survives. Test-first
-      with the host shim harness (drive the REAL driver through poll();
-      assert the read pattern: a 26-byte request first, continuations
-      only for frames longer than 26, no dispatch of incomplete frames);
-      the streaming behaviour itself stays a P4.1 hardware check against
-      the P3.25 build.
+- [x] P3.24 → done, moved to the Done section below.
+- [x] P3.25 → done, moved to the Done section below.
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -737,6 +744,22 @@ item names what needs the Pico W plugged in.
       climbing at roughly the poll rate with `other` near zero, and
       pointer/touch input reaching the laptop; if `other` persists, the
       P3.24 snapshot names the content instead of the counters guessing.
+      Update (2026-11-19): P3.24 and P3.25 are LANDED (commit `2267497`)
+      — flash `./flash.sh SkywriterController` from the `pico-arduino`
+      folder and rerun T5 from power-up. The prediction stands as
+      written. If `other` persists, the health line now shows the
+      content: `other_snap=` first 8 bytes + `other_read=` actual count —
+      a 0x91 visible at a shifted offset = residual misalignment (the
+      sensor's read-pointer question becomes P4.1's); all 0x00 = padding
+      on empty reads, so run the supply-wire discriminator (disconnect
+      the SENSOR end of the 3.3 V supply wire with the Pico running: a
+      real TS-to-ground short keeps TRFR at ~0 V, a healthy line floats
+      to ~3.3 V through the pull-up) before re-soldering anything; all
+      0xFF = a wedged slave, power-cycle the sensor and retest; a known
+      identity with `other_read=` under the promised Size = the sensor
+      stopped serving mid-message (P4.1's continuation question). Then
+      gesture over the board: pointer, taps, AirWheel — the original
+      P4.0 acceptance run.
       Closure: the tests that apply (T0–T6) recorded with their logs in
       `HW_REPORT.md`; one root cause named and linked to its fix (P3.23 for H1;
       a veroboard repair for H3; a new item for H4–H5 if confirmed); then P4.0
@@ -791,15 +814,19 @@ item names what needs the Pico W plugged in.
 - [ ] P4.1 `hw/serial_probe.py` (host, needs `pyserial`): flash a test sketch
       via `pico-arduino/flash.sh`, capture the USB serial port, assert boot
       banner, sensor frame streaming and framing. Hardware-check notes:
-      (P3.11b) the shared Arduino library's `poll()` now issues 132-byte I2C
-      reads (its former 32-byte request truncated the firmware-version
-      frame); the interface guide only promises that reading a whole message
-      works, so confirm on hardware that sensor-frame streaming is unaffected
-      when the host clocks more bytes than the current frame contains.
-      (Update 2026-11-18: the first counter capture shows the worst case —
-      P4.0a hypothesis H7, other=100 % from the first poll. P3.25 ports the
-      Python driver's Size-field-sized reads to the Arduino driver; re-run
-      this check against the P3.25 build.)
+      (P3.25, superseding the old P3.11b single-request note) the shared
+      Arduino library's `poll()` now reads EXACTLY 26 bytes first and
+      fetches a longer message with continuation reads bounded by the
+      frame's own Size field while the transfer line is still asserted —
+      the Python driver's P3.11c pattern, replacing the 132-byte request
+      whose over-read was hardware session 4's leading suspect (P4.0a H7,
+      `other=100 %` from the first poll). Confirm on hardware: sensor
+      frames stream intact (the P4.0a T5 prediction — `frames sensor`
+      climbing at roughly the poll rate, `other` near zero), and the
+      sensor's I2C buffer really does continue across the separate read
+      transactions of one asserted transfer (the fixture replay proves
+      the driver-side arithmetic only; the 132-byte version frame must
+      still arrive complete as 26 + 32 + 32 + 32 + 10).
       (P3.11c) the Raspberry Pi Python driver now sizes its reads from the
       frame's Size field and fetches frames longer than the first 26-byte
       read with chunked continuation reads (26 + 32 + 32 + 32 + 10 for the
@@ -944,6 +971,102 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.25 — the Arduino driver reads the sensor the Python way: exactly 26
+  bytes first, longer messages by their own Size field (commit `2267497`)
+  — the H7 fix, hardware report session-4's failure F7. In plain
+  language: the Pico used to ask the sensor for 132 bytes on every read
+  while a normal message is 26 — clocking 106 bytes past the end of each
+  message into undefined territory. If the sensor serves the start of the
+  next queued message there, its internal read pointer ends up
+  mid-frame and every later read starts inside a message, so the
+  header's identity byte never lands on a known value again — exactly
+  the other=100 %-from-the-first-poll / zero-events signature the
+  2026-11-18 and 2026-11-19 captures showed, and the intermittent
+  history (sessions 1–2's occasional valid frames = lucky realignment
+  when a read drained the queue onto a boundary) fits the same story.
+  Boot always passed because the acknowledge path reads exactly
+  26 bytes. Parts (all in `arduino/Skywriter/`):
+  - `poll()` requests EXACTLY `SW_FIRST_READ_SIZE` (26) bytes first; a
+    frame whose Size field (byte 0, validated 4 ≤ size ≤ 132 — the
+    longest real message; the protocol cap is 255 but no sensor message
+    exceeds Fw_Version_Info's 132) announces a longer message is fetched
+    with continuation reads capped at `SW_I2C_READ_CHUNK` (32) and
+    bounded by the Size, while the transfer (TS) line is still asserted
+    — the Python driver's P3.11c pattern; the 132-byte Fw_Version_Info
+    frame arrives as 26 + 32 + 32 + 32 + 10. P3.11b's GOAL (the whole
+    120-byte version string) survives through those continuations; its
+    single-132-byte-request MECHANISM is what this item removed, and
+    with it H7's over-read.
+  - Dispatch only complete frames: a corrupt Size (under 4, above 132)
+    or a continuation that serves nothing means the frame is skipped —
+    never decoded half-read (the Python driver's empty-continuation
+    rule). The payload copy is Size-bounded, so bus padding or an
+    over-answering read never reaches a decoder (the same rule as
+    P3.11c), and the receive buffer is drained after every transfer so
+    the next requestFrom starts clean on every Wire implementation, not
+    only the ones that reset it themselves.
+  - The P3.23 release rule (transfer line let go, pull-up restored)
+    stands on every exit path, including the two new ones (corrupt
+    Size, incomplete frame) — pinned by the new tests.
+  - Test-first discipline held: the Wire host shim
+    (`tests/cpp/Wire.h` + `arduino_shim.cpp`) now models the sensor
+    continuing its buffer across the reads of one asserted transfer
+    (the P3.11c contract the sized reads rely on) and records every
+    requestFrom call; the new host binary `tests/cpp/
+    host_read_pattern_main.cpp` + `tests/test_driver_read_pattern.py`
+    drive the REAL driver through its genuine `poll()` and pin the
+    pattern: one 26-byte request for the classic frame (never the old
+    132), no continuation for a 14-byte frame, the exact
+    26,32,32,32,10 chase for the recorded 132-byte F17 fixture, no
+    dispatch of incomplete or corrupt-Size frames, the release pair on
+    every new exit path, and closed transfer accounting (short +
+    sensor + status + fw + other = every transfer). Verified FAILING
+    against the pre-P3.25 code first (8 of the 10 — the old single
+    132-byte request, no continuations, no snapshot; the short-read and
+    accounting cases were already true then and stayed green), green
+    after the rewrite.
+  - Honest scope note, as the item itself assigns: whether the real
+    sensor continues its I2C buffer across the separate reads of one
+    asserted transfer is a P4.1 hardware check against this build — the
+    offline harness proves the driver-side arithmetic only (the same
+    caveat the P3.11c entry recorded for the Python driver).
+- P3.24 — the unknown-frame snapshot exists (commit `2267497`): whenever
+  a transfer read a header but did NOT dispatch, the driver stores
+  public state — the first 8 frame bytes (size, flags, sequence,
+  identity + 4 payload bytes) and the byte count the reads actually
+  returned (the `Wire.requestFrom` counts the old code ignored
+  entirely) — and the firmware's health line prints them once per line
+  as `other_snap=` (colon-separated zero-padded hex) and `other_read=`,
+  right after the `other=` counter they explain. The 200 Hz hot path
+  only stores; nothing prints inside `poll()`.
+  - Scope decision recorded (a deliberate superset of the item's
+    letter): the item says "when a frame's identity byte is not
+    0x91/0x15/0x83" — written against the OLD read pattern, where
+    every poll reached the identity switch. With P3.25's Size
+    validation in place, an identity-only snapshot would be blind to
+    corrupt-Size frames — exactly the frames H7 misalignment produces
+    (a mid-frame Size byte is garbage too). The snapshot therefore
+    fires on EVERY undispatched frame that produced a header: unknown
+    identity, corrupt Size, or incomplete. Each self-identifies in the
+    content, matching the item's predictions: a 0x91 identity visible
+    at a SHIFTED offset = the mid-frame misalignment (H7); all 0x00 =
+    the bus answers padding on reads with nothing queued (then hunt the
+    transfer-line short — the HW report's supply-wire discriminator
+    settles it); all 0xFF = a wedged slave (power-cycle the sensor and
+    retest); a KNOWN identity with the read count under the promised
+    Size = an incomplete read (the P4.1 continuation question).
+  - `frames_other` counts them all, so the health line's accounting
+    closes: short + sensor + status + fw + other = every transfer
+    started — nothing silently disappears into an unnamed bucket, which
+    is what made the 100 % "other" capture uninterpretable in the
+    first place.
+  - Pinned by `tests/test_driver_read_pattern.py` (snapshot content for
+    each undispatched shape — shifted identity, all-zero padding,
+    over-long Size, truncated frame; latest-wins; dispatched frames
+    never touch it; short reads never touch it; the actual-read-count
+    evidence) and `tests/test_firmware_sketch.py` (the health-line
+    print: both fields, the zero-padded hex format, placement with the
+    other= counter).
 - W8 — ledger housekeeping done (commit `1c8bbb2`): (a) the P3.17b Done
   entry's "commit `<HASH>`" placeholder is now the real hash `5553de4`
   (the loop's automatic-snapshot commit, which carried the
