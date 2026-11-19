@@ -441,6 +441,66 @@ def test_pace_resets_on_link_loss():
         "the pace reset belongs to the link-loss drain")
 
 
+# ------------------------------------- P3.24/P3.25: health-line snapshot ---
+# (The unknown-frame content snapshot and the sized-read pattern — the
+# answer to the hardware session-4 report F7: `other=100%` frames from the
+# first poll, traced to the single 132-byte over-read desynchronising the
+# sensor's message framing. The sketch prints the snapshot once per health
+# line; the read pattern itself is pinned end-to-end through the real
+# driver in tests/test_driver_read_pattern.py.)
+
+def test_health_line_prints_the_unknown_frame_snapshot():
+    """P3.24: the health line carries the latest undispatched frame's first
+    8 bytes (`other_snap=`, colon-separated hex, zero-padded) and the byte
+    count the reads actually returned (`other_read=`) — the content
+    evidence that separates a shifted 0x91 (misaligned framing), all-0x00
+    padding, an all-0xFF wedged slave, and an incomplete frame (known
+    identity, read count under the promised Size)."""
+    src = sketch_source()
+    body = function_body("print_health_status")
+    assert "other_snap=" in body, (
+        "the health line must print the snapshot's content bytes")
+    assert "Skywriter.other_snapshot" in body, (
+        "the snapshot bytes come from the driver's public state")
+    assert "other_read=" in body
+    assert "Skywriter.other_snapshot_read" in body, (
+        "the snapshot's actual-read-count comes from the driver's public "
+        "state (the requestFrom counts the old code ignored)")
+    # Zero-padded two-digit hex per byte, colon-separated — the exact
+    # format the hardware session reads off the console.
+    assert re.search(r"< 0x10\) Serial\.print\('0'\)", body), (
+        "each snapshot byte must print zero-padded")
+    assert body.count("Serial.print(':')") == 1, (
+        "the eight snapshot bytes are colon-separated")
+
+
+def test_health_line_snapshot_sits_with_the_other_counter():
+    """The snapshot prints together with the `other=` counter it explains,
+    so a single health line answers both "how many" and "what"."""
+    body = function_body("print_health_status")
+    other_at = body.index('" other="')
+    snap_at = body.index('" other_snap="')
+    events_at = body.index('" events pos="')
+    assert other_at < snap_at < events_at
+
+
+def test_driver_never_overreads_the_sensor_frame():
+    """P3.25: the sketch-side sensor code must have no trace of the old
+    single-request over-read — the read pattern (26 first, then
+    Size-bounded continuations) lives in the shared driver, pinned by
+    tests/test_driver_read_pattern.py; this pin keeps the sketch's own
+    I2C (Inter-Integrated Circuit) read — the boot acknowledge check —
+    at its exact 26 bytes."""
+    code = sketch_code()
+    m = re.search(r"Wire\.requestFrom\(SW_ADDR, \(unsigned char\)(\d+)\)", code)
+    assert m and int(m.group(1)) == 26, (
+        "the boot acknowledge read must ask for exactly the classic "
+        "26-byte frame")
+    assert "SW_MAX_FRAME_SIZE" not in code, (
+        "the sketch must not request the longest-frame size — the old "
+        "132-byte over-read pattern (P3.11b) must not return here")
+
+
 # ------------------------------------- P3.21: keyboard usage codes (fix item)
 # (Hardware sessions 1 + the 2026-11-17 "N": taps typed letters. Two causes,
 # both fixed: the usage constants were 78/79 where the USB HID Usage Tables

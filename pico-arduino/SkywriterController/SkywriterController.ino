@@ -23,7 +23,14 @@
     reads and transfer-line-low polls as shares of all polls), frames by
     message type, dispatched/dropped sensor events, HID reports by kind and
     Bluetooth connects/disconnects — the hardware gate P4.0a's main
-    instrument.
+    instrument. Since fix item P3.24 the health line also prints the
+    latest undispatched frame's first 8 bytes and actual read count
+    (`other_snap=` / `other_read=`) — the evidence that names what the
+    "other" frames contain. And since fix item P3.25 the driver reads
+    exactly the classic 26-byte sensor frame first and only fetches more
+    when the frame's own Size field says the message is longer (never the
+    old single 132-byte over-read that desynchronised the sensor's
+    message framing).
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -287,6 +294,22 @@ static void print_health_status(unsigned long now_ms) {
   Serial.print(Skywriter.frames_firmware);
   Serial.print(" other=");
   Serial.print(Skywriter.frames_other);
+  // P3.24: the latest undispatched frame's content — the evidence that
+  // names WHAT the "other" frames are. A 0x91 identity visible at a
+  // shifted offset = the sensor's message framing is misaligned (the
+  // over-read fault, P4.0a H7); all 0x00 = the bus answers padding on
+  // reads with nothing queued (then hunt a transfer-line short);
+  // all 0xFF = a wedged slave (power-cycle the sensor); a known identity
+  // with the read count under the promised Size = an incomplete read.
+  // Zeros with other=0 mean no such frame has been seen since boot.
+  Serial.print(" other_snap=");
+  for (unsigned char i = 0; i < 8; i++) {
+    if (i) Serial.print(':');
+    if (Skywriter.other_snapshot[i] < 0x10) Serial.print('0');
+    Serial.print(Skywriter.other_snapshot[i], HEX);
+  }
+  Serial.print(" other_read=");
+  Serial.print(Skywriter.other_snapshot_read);
   Serial.print(" events pos=");
   Serial.print(ev_position);
   Serial.print(" touch=");

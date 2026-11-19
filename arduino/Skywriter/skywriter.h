@@ -42,11 +42,16 @@
   Fw_Version_Info (0x83) — Interface.pdf §4.3 Table 4-5:
     payload byte 0 = FwValid (only 0xAA = valid GestIC Library, Table 4-6),
     bytes 8..127 = FwVersion, a 120-byte ASCII field, NUL-padded.
-  Payload capacities: no sensor message is longer than Fw_Version_Info, so
-  one request of this size always covers a whole frame; the driver trims to
-  the frame's own size field before decoding.
+  Read pattern (fix item P3.25, hypothesis H7): the first read of a transfer
+  asks for exactly the classic full-layout sensor frame; a longer message
+  (its own Size field says so) is fetched with continuation reads bounded
+  by that Size — NEVER one large request over-reading past the message end
+  (the former 132-byte request desynchronised the sensor's message framing;
+  see poll()). So one transfer reads a whole frame, never more.
 */
 #define SW_MAX_FRAME_SIZE          132 // header 4 + payload 128 (Fw_Version_Info)
+#define SW_FIRST_READ_SIZE         26  // the classic full-layout sensor frame
+#define SW_I2C_READ_CHUNK          32  // continuation chunk, bounded by the frame's Size
 #define SW_PAYLOAD_SYSTEM_STATUS_ID    0 // 1 byte
 #define SW_PAYLOAD_SYSTEM_STATUS_ERROR 2 // 2 bytes, little-endian
 #define SW_PAYLOAD_FW_INFO_VALID       0 // 1 byte: only 0xAA is valid (Table 4-6)
@@ -117,14 +122,33 @@ class _SkyWriter
     //   short_reads      — transfers whose I2C read returned fewer than
     //                      the 4 header bytes (the H1 failed-read path;
     //                      with P3.23's fix that path releases the line).
-    //   frames_sensor_data / frames_status / frames_firmware / frames_other
-    //                    — complete frames read, by message identity
+    //   frames_sensor_data / frames_status / frames_firmware
+    //                    — complete frames dispatched, by message identity
     //                      (0x91 sensor data, 0x15 System_Status ack,
-    //                      0x83 Fw_Version_Info, anything else "other").
-    //                      A firmware count climbing at the read rate
-    //                      while sensor data stops = a stalled read
-    //                      (session-3 symptom); a small fresh count =
-    //                      the sensor restarted (H4).
+    //                      0x83 Fw_Version_Info).
+    //   frames_other     — transfers that read a header but did NOT
+    //                      dispatch (fix items P3.24/P3.25): an unknown
+    //                      message identity, a Size field outside
+    //                      4..SW_MAX_FRAME_SIZE, or a frame whose
+    //                      continuation reads could not complete it. The
+    //                      health line's shares close over these: every
+    //                      transfer is short + sensor + status + fw +
+    //                      other. (Before P3.25 this counted only the
+    //                      unknown-identity dispatch case.)
+    //   other_snapshot[8] / other_snapshot_read
+    //                    — fix item P3.24, the instrument for the
+    //                      hardware gate P4.0a: the first 8 bytes (size,
+    //                      flags, sequence, identity + 4 payload bytes)
+    //                      and the byte count the reads actually returned
+    //                      of the LAST undispatched frame. poll() only
+    //                      stores; the sketch's health line prints it.
+    //                      Content signatures that name the fault: a 0x91
+    //                      identity visible at a SHIFTED offset = the
+    //                      sensor's message framing is misaligned (H7);
+    //                      all 0x00 = the bus answers padding on reads
+    //                      with nothing queued; all 0xFF = a wedged
+    //                      slave. A known identity with a read count under
+    //                      the promised Size = an incomplete read.
     unsigned long polls = 0;
     unsigned long ts_low_polls = 0;
     unsigned long short_reads = 0;
@@ -132,6 +156,11 @@ class _SkyWriter
     unsigned long frames_status = 0;
     unsigned long frames_firmware = 0;
     unsigned long frames_other = 0;
+    // Latest undispatched-frame snapshot (P3.24); zero until the first
+    // such frame. `other_snapshot_read` counts the bytes the reads
+    // actually returned (the requestFrom counts the old code ignored).
+    unsigned char other_snapshot[8] = {0,0,0,0,0,0,0,0};
+    unsigned char other_snapshot_read = 0;
     // Accumulated AirWheel rotation in degrees (clamped 0..1000, mirroring
     // the Python driver's `rotation` global — the P3.4 reference).
     float rotation = 0.0f;
@@ -150,12 +179,21 @@ class _SkyWriter
     bool airwheel_counter_valid = false;
     unsigned char xfer, rst, addr;
     // Frame receiving buffer: sized for the longest sensor message,
-    // Fw_Version_Info (0x83, 132 bytes), so a whole frame — including its
-    // 120-byte version field — is captured in one read. Before P3.11b this
-    // was 32 bytes, which truncated the version string to its first ~20
-    // characters. The copy loop is bounded by its size (never writes past
-    // the terminator index).
+    // Fw_Version_Info (0x83, 132 bytes = 4 header + 128 payload), so a
+    // whole frame always fits. Since P3.25 the frame arrives as a 26-byte
+    // first read plus Size-bounded continuation reads (never one large
+    // over-reading request); the payload copy is bounded by the frame's
+    // own Size field, so bus padding or over-answering never reaches a
+    // decoder (the same rule as the Python driver, P3.11c).
     unsigned char command_buffer[SW_MAX_FRAME_SIZE];
+    // P3.24: count + snapshot one transfer that read a header but will not
+    // dispatch (unknown identity, corrupt Size, or incomplete frame).
+    // `payload_avail` bytes of the payload already sit in command_buffer;
+    // the snapshot zero-fills the rest of its 4 payload slots.
+    void record_undispatched_frame(unsigned char d_size, unsigned char d_flags,
+                                  unsigned char d_seq, unsigned char d_ident,
+                                  unsigned char read_count,
+                                  unsigned char payload_avail);
     void handle_sensor_data(unsigned char* data);
     void handle_status_info(unsigned char* data);
     void handle_firmware_info(unsigned char* data);

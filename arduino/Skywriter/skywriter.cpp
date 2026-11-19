@@ -30,18 +30,22 @@ void _SkyWriter::poll(){
     pinMode(this->xfer, OUTPUT);
     digitalWrite(this->xfer, LOW);
     
-    // One read request sized for the longest sensor message
-    // (Fw_Version_Info, SW_MAX_FRAME_SIZE bytes): a whole frame must be
-    // captured in this single read, so control frames like the firmware
-    // version string arrive complete. Shorter frames simply return fewer
-    // bytes. Before P3.11b this read only 32 bytes, which cut the 120-byte
-    // version field of an Fw_Version_Info frame to its first ~20
-    // characters.
-    Wire.requestFrom(this->addr, (unsigned char)SW_MAX_FRAME_SIZE);
+    // Size-field reads (fix item P3.25, hypothesis H7): the first read
+    // asks for EXACTLY the classic full-layout sensor frame, and only a
+    // message the frame's own Size field announces as longer is fetched
+    // with continuation reads bounded by that Size — the Python driver's
+    // P3.11c pattern (26 first, then 32-byte chunks). The former single
+    // 132-byte request (P3.11b) clocked up to 106 bytes past the end of
+    // every 26-byte frame; what the sensor serves there is undefined, and
+    // the first hardware counter capture (other=100 % from the first
+    // poll, zero events, HW session 4) is exactly the desynchronised
+    // framing that over-read produces. The 132-byte Fw_Version_Info
+    // capture still works: its Size field drives the continuations.
+    unsigned char got = Wire.requestFrom(this->addr, (unsigned char)SW_FIRST_READ_SIZE);
     
     unsigned char d_size,d_flags,d_seq,d_ident;
     
-    if( Wire.available() >= 4 ){
+    if( got >= SW_HEADER_SIZE ){
       d_size  = Wire.read();
       d_flags = Wire.read();
       d_seq   = Wire.read();
@@ -60,42 +64,106 @@ void _SkyWriter::poll(){
       pinMode(this->xfer, INPUT_PULLUP);
       return;
     }
+
+    // The byte count the reads actually returned (fix item P3.24): the
+    // requestFrom count the old code ignored — the evidence number the
+    // undispatched-frame snapshot prints against the promised Size.
+    unsigned char read_count = got;
     
     this->command_buffer[0] = '\0';
     
-    // Copy the remaining frame bytes. Bounded by the buffer size: never
-    // write past the terminator index (the former unbounded loop relied on
-    // the old 32-byte request exactly filling a 32-byte buffer — a hazard
-    // that must not return with the larger request).
-    unsigned char i = 0;
-    while(Wire.available() && i < (SW_MAX_FRAME_SIZE - SW_HEADER_SIZE)){
-      this->command_buffer[i] = Wire.read();
-      i++;
+    // The Size field counts the whole message INCLUDING this 4-byte
+    // header (Interface.pdf §3.3; §2.3 note 1 recommends sizing the read
+    // from it). A value outside 4..SW_MAX_FRAME_SIZE cannot describe a
+    // real message: no continuation read, no dispatch — the frame is
+    // counted and snapshotted below instead of decoded half-read.
+    if( d_size >= SW_HEADER_SIZE && d_size <= SW_MAX_FRAME_SIZE ){
+      // Copy the payload bytes that arrived with the first read. Bounded
+      // by the frame's own Size field: an over-answering read (bus
+      // padding past the message end) never spills into the payload —
+      // the same rule as the Python driver's sized reads (P3.11c), and
+      // the bound that keeps the copy inside the receive buffer.
+      unsigned char received = SW_HEADER_SIZE;
+      while( Wire.available() && received < d_size ){
+        this->command_buffer[received - SW_HEADER_SIZE] = Wire.read();
+        received++;
+      }
+      
+      // Continuation reads, bounded by the Size field, while the transfer
+      // line is still asserted — only for messages longer than the first
+      // read. A continuation that serves nothing means the frame cannot
+      // be completed: stop and dispatch nothing half-read (the Python
+      // driver's empty-continuation rule, P3.11c).
+      while( received < d_size ){
+        unsigned char want = d_size - received;
+        if( want > SW_I2C_READ_CHUNK ) want = SW_I2C_READ_CHUNK;
+        unsigned char more = Wire.requestFrom(this->addr, want);
+        read_count += more;
+        if( more == 0 ) break;
+        while( Wire.available() && received < d_size ){
+          this->command_buffer[received - SW_HEADER_SIZE] = Wire.read();
+          received++;
+        }
+      }
+      
+      if( received >= d_size ){
+        // Complete frame: the payload copy is exactly the Size-field byte
+        // range minus the 4-byte header (the P3.3 off-by-four contract),
+        // and the terminator stays inside the receive buffer (d_size is
+        // validated against SW_MAX_FRAME_SIZE above).
+        this->command_buffer[d_size - SW_HEADER_SIZE] = '\0';
+      
+        switch(d_ident){
+          case 0x91:
+            this->frames_sensor_data++;
+            this->handle_sensor_data(this->command_buffer);
+            break;
+          case 0x15:
+            // System_Status acknowledge, decoded as a control event (P3.11b).
+            this->frames_status++;
+            this->handle_status_info(this->command_buffer);
+            break;
+          case 0x83:
+            // Fw_Version_Info report, decoded as a control event (P3.11b).
+            this->frames_firmware++;
+            this->handle_firmware_info(this->command_buffer);
+            break;
+          default:
+            // An unknown message identity: counted and its content
+            // snapshotted (fix item P3.24, the P4.0a instrument).
+            this->record_undispatched_frame(d_size, d_flags, d_seq, d_ident,
+                                            read_count,
+                                            d_size - SW_HEADER_SIZE);
+            break;
+        }
+      }
+      else{
+        // The frame could not be completed up to its Size: dispatch
+        // nothing half-read, count it, and snapshot it — the snapshot's
+        // read count against the promised Size is the evidence.
+        this->record_undispatched_frame(d_size, d_flags, d_seq, d_ident,
+                                        read_count,
+                                        received - SW_HEADER_SIZE);
+      }
     }
-    this->command_buffer[i] = '\0';
-  
-    switch(d_ident){
-      case 0x91:
-        this->frames_sensor_data++;
-        this->handle_sensor_data(this->command_buffer);
-        break;
-      case 0x15:
-        // System_Status acknowledge, decoded as a control event (P3.11b).
-        this->frames_status++;
-        this->handle_status_info(this->command_buffer);
-        break;
-      case 0x83:
-        // Fw_Version_Info report, decoded as a control event (P3.11b).
-        this->frames_firmware++;
-        this->handle_firmware_info(this->command_buffer);
-        break;
-      default:
-        // An unknown message identity is worth counting too: a stream of
-        // these means the framing is off (the P4.0a counters' "other" row).
-        this->frames_other++;
-        break;
+    else{
+      // Corrupt Size field (under 4 or above the longest real message):
+      // no continuation read, no dispatch. Keep at most the snapshot's
+      // four payload bytes of what the bus actually served, so the
+      // evidence records real content — then count + snapshot.
+      unsigned char snap_payload = 0;
+      while( Wire.available() && snap_payload < 4 ){
+        this->command_buffer[snap_payload++] = Wire.read();
+      }
+      this->record_undispatched_frame(d_size, d_flags, d_seq, d_ident,
+                                      read_count, snap_payload);
     }
     
+    // Drain whatever the Size-bounded copies left in the receive buffer
+    // (an over-answering read can leave up to a chunk there): the next
+    // requestFrom then starts from a clean buffer on every Wire
+    // implementation, not only the ones that reset it themselves.
+    while( Wire.available() ) Wire.read();
     
     // Release the transfer line after a completed transfer (fix item
     // P3.23, hypothesis H2): the pull-up is RESTORED on release, exactly
@@ -106,6 +174,39 @@ void _SkyWriter::poll(){
     digitalWrite(this->xfer, HIGH);
     pinMode(this->xfer, INPUT_PULLUP);
   }
+}
+
+void _SkyWriter::record_undispatched_frame(unsigned char d_size,
+                                          unsigned char d_flags,
+                                          unsigned char d_seq,
+                                          unsigned char d_ident,
+                                          unsigned char read_count,
+                                          unsigned char payload_avail){
+  // Fix item P3.24 — the instrument that names WHAT the frames the
+  // counters cannot decode contain (the hardware gate P4.0a's evidence).
+  // Every transfer that read a header but did NOT dispatch — an unknown
+  // message identity, a corrupt Size field, or a frame whose continuation
+  // reads could not complete it — is counted here, and its first 8 bytes
+  // (size, flags, sequence, identity + 4 payload bytes) plus the byte
+  // count the reads actually returned are stored as public state. The
+  // sketch's health line prints them; the 200 Hz path itself never
+  // prints. Content signatures the snapshot separates (P4.0a): a 0x91
+  // identity visible at a shifted offset = the sensor's message framing
+  // is misaligned (H7); all 0x00 = the bus answers padding on reads with
+  // nothing queued; all 0xFF = a wedged slave; a known identity with the
+  // read count under the promised Size = an incomplete read.
+  // `payload_avail` payload bytes already sit at the front of
+  // command_buffer; the rest of the snapshot's payload slots zero-fill.
+  this->frames_other++;
+  this->other_snapshot[0] = d_size;
+  this->other_snapshot[1] = d_flags;
+  this->other_snapshot[2] = d_seq;
+  this->other_snapshot[3] = d_ident;
+  for( unsigned char j = 0; j < 4; j++ ){
+    this->other_snapshot[SW_HEADER_SIZE + j] =
+      (j < payload_avail) ? this->command_buffer[j] : 0;
+  }
+  this->other_snapshot_read = read_count;
 }
 
 void _SkyWriter::onTouch(    void (*function)(unsigned char) ){this->handle_touch    = function;}
