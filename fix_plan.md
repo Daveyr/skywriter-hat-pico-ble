@@ -356,6 +356,72 @@ docker run -it --rm \
     all" at the same moment; its cause is not known. No oscilloscope or logic
     analyser is available, so the firmware counters (P3.22) become the main
     instrument. The revised diagnosis is in P4.0a.
+    Update (2026-11-18, first `SKYSTATE health` capture — build `1c8bbb2`
+    flashed and running). The counters delivered their verdict, and it is
+    not any of H1–H6 as ranked. Captured readings (printed every 2 s;
+    uptime 883–909 s; counts are cumulative since boot): polls=67390,
+    ts_low=67390 (100.00 %), short_reads=0 (0.00 %), frames sensor=0
+    status=0 fw=0 other=67390 (100 %), events pos/touch/gest/wheel all 0,
+    dropped=0, ble conn=5, uptime continuous. What each reading proves:
+    - short_reads=0 over ~69,000 reads: every read returned at least the
+      4 header bytes, so the sensor acknowledges at 0x42 and serves bytes
+      every time — power, wiring and the I2C (Inter-Integrated Circuit)
+      bus electrically work. A dead, unpowered or hard-reset sensor
+      would refuse to acknowledge and put short_reads at 100 % instead.
+    - Boot passed (the health lines and `ble conn=5` can only print if
+      configure_sensor() succeeded — it loops forever printing
+      sensor_config_failed otherwise): all four runtime commands were
+      acknowledged at this boot through the sketch's EXACTLY-26-byte
+      acknowledge reads. The sensor returned well-formed frames at boot.
+    - ts_low=100 % cumulative, from the first poll after boot: with the
+      soldered 10 kΩ pull-up, a floating or loose wire reads HIGH, so
+      the sensor is actively asserting data-ready — H2 ruled out, and
+      the sensor is alive and wants to hand over frames.
+    - frames other=100 % from the first poll: no read since boot produced
+      a byte-3 message identity of 0x91/0x15/0x83. A configured sensor
+      streams 0x91 continuously, so the frames it IS producing are not
+      reaching the driver as valid frames — which also yields zero
+      events with zero drops (H6's gate is downstream of decoding).
+    Verdict: H1 eliminated (the failed-read path never ran — short_reads
+    is 0 — and P3.23 releases the line on every path anyway); H2
+    eliminated (the line is actively low, not floating); H5 eliminated
+    (uptime continuous, no reset); H6 eliminated (nothing ever decoded
+    to drop); H4 unlikely (a restarted sensor would idle the transfer
+    line high, so ts_low would fall toward 0 % instead of holding 100 %,
+    and no sensor_firmware line appeared); H3 not needed to explain the
+    signature (the wires demonstrably carry working signals). New
+    leading suspect: H7 below, with its evidence instrument P3.24 and
+    its fix P3.25.
+    Update (2026-11-19, T1 meter reading + boot capture from power-up).
+    - T1 on the transfer (TS) line: with the hardware powered and the
+      firmware running, TRFR to GND reads 15.4 mV, stable. That is
+      effectively 0 V: with the soldered 10 kΩ pull-up to 3.3 V, a
+      floating or loose wire reads near 3.3 V, so something on the line
+      is actively pulling it to ground. Consistent with the sensor
+      continuously asserting data-ready (H7's picture: it has frames to
+      hand over that the over-read mangles) — but also consistent with a
+      TS-to-GND short on the veroboard, which would freeze the sensor's
+      message queue the same way (the sensor never sees the host's
+      release edge). The meter cannot separate those two; the P3.24
+      snapshot separates them (shifted 0x91 = H7's misalignment; all
+      0x00 = padding on empty reads → then hunt the short).
+      Discriminator available without code: with the Pico still running,
+      disconnect the SENSOR end of the 3.3 V supply wire — a real short
+      keeps TRFR at ~0 V, while a healthy line floats to ~3.3 V through
+      the pull-up. Record which before re-soldering anything.
+    - The boot capture is now on record from power-up (uptime 2 s first
+      health line): `ble_resync`/`ble_connected` printed, no
+      sensor_config_failed possible after that point (the sketch would
+      never have reached the radio), confirming again that all four
+      runtime commands were acknowledged at this boot. The health line
+      repeats the 2026-11-18 signature from poll 1: ts_low=100 %,
+      short_reads=0, frames other=100 %.
+    - NEW evidence for P4.3/F4: five `ble_connected` events within the
+      first 4 seconds of uptime (conn=1 → conn=5 across the first two
+      health lines), with zero `ble_dropped` between them — the
+      duplicate-connect behaviour the ledger flagged in session 2, now
+      captured with clean timing. Record it in the P4.3 log analysis;
+      do not change connection handling yet.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -463,6 +529,46 @@ in Phase 4 on hardware
 - [x] P3.22 → done, moved to the Done section below.
 - [x] P3.23 → done, moved to the Done section below.
 
+### 3f — Post-counter items (opened 2026-11-18 from the first SKYSTATE
+health capture; evidence and verdict in P4.0a's 2026-11-18 update,
+new leading suspect H7)
+
+- [ ] P3.24 — Instrument the unknown frames. The P3.22 counters show
+      other=100 % but cannot show WHAT the unknown frames contain, and
+      that content is the evidence that confirms or refutes H7. In
+      `arduino/Skywriter` poll(), when a frame's identity byte (byte 3)
+      is not 0x91/0x15/0x83, store a small public snapshot alongside the
+      counters: the first 8 frame bytes (size, flags, sequence, identity
+      + 4 payload bytes) and the byte count the read actually returned
+      (`Wire.requestFrom`'s count — currently ignored; `Wire.available()`
+      gates the header). Hot-path rule unchanged (200 Hz increments
+      only — poll() stores, nothing prints). print_health_status() in
+      `pico-arduino/SkywriterController` prints the latest snapshot once
+      per health line. Predictions the snapshot must separate: the 0x91
+      identity visible but SHIFTED by a constant offset confirms H7's
+      mid-frame misalignment; all 0x00 means the sensor serves padding
+      on reads with nothing queued (then the transfer line is the liar —
+      hunt a transfer-line short with the meter, T1); all 0xFF means a
+      wedged slave (power-cycle the sensor and retest).
+- [ ] P3.25 — Port the Python driver's sized reads to the Arduino
+      driver (the H7 fix). poll() reads EXACTLY 26 bytes first, then —
+      only when the frame's own Size field (byte 0, validated
+      4 ≤ size ≤ 132) says the message is longer — fetches continuation
+      reads bounded by Size while the transfer (TS) line is still
+      asserted, mirroring the Python driver's P3.11c pattern (26 +
+      32-byte chunks, `library/skywriter/__init__.py` `_do_poll`). A
+      frame that cannot be completed is not dispatched half-read (same
+      rule as the Python driver). Dispatch only complete frames; the
+      P3.23 release rule stands on every exit path. This replaces the
+      single 132-byte request (P3.11b) whose over-read is H7's
+      mechanism — the 132-byte Fw_Version_Info capture still works via
+      the Size-field continuation, so P3.11b's goal survives. Test-first
+      with the host shim harness (drive the REAL driver through poll();
+      assert the read pattern: a 26-byte request first, continuations
+      only for frames longer than 26, no dispatch of incomplete frames);
+      the streaming behaviour itself stays a P4.1 hardware check against
+      the P3.25 build.
+
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
 The container can *write* these files but only the host can *run* them. Each
@@ -560,6 +666,24 @@ item names what needs the Pico W plugged in.
       - H6 — events dropped, or the laptop reading a different input device. The
         sensor callbacks drop events while the link is closed
         (`sensor_events_dropping_unconnected`).
+      - H7 — the 132-byte over-read desynchronises the sensor's message
+        framing (code-traced; NEW leading suspect, 2026-11-18). The
+        Arduino driver's poll() clocks a single 132-byte read (the
+        P3.11b request) while a sensor data frame is 26 bytes long, so
+        the host asks for 106 bytes past the end of the message. What
+        the sensor serves there is undefined — the P4.1 note has carried
+        this exact worry, unconfirmed on hardware, since P3.11b. If the
+        sensor serves the start of the next queued message there, its
+        internal read pointer is left mid-frame and EVERY later read
+        starts inside a frame, so the header's identity byte never lands
+        on 0x91/0x15/0x83 — exactly the other=100 %-from-the-first-poll
+        signature the 2026-11-18 capture shows. It also explains the
+        intermittent history (sessions 1–2's occasional valid frames =
+        lucky realignment when a read drained the queue onto a boundary)
+        and why boot always passes (the acknowledge path reads exactly
+        26 bytes). The Python reference driver never over-reads: 26
+        bytes first, then continuation reads sized from the frame's own
+        Size field (P3.11c).
       Tests, cheapest first (human unless marked):
       - T0 — power OFF, multimeter in continuity mode. Check each sensor pin
         against the Pico pin the sketch uses: SDA to GP4 (physical pin 6), SCL to
@@ -605,6 +729,14 @@ item names what needs the Pico W plugged in.
       run T3/T4/T5/T6 below; H1/H2 can no longer explain a quiet console
       — if input is still absent with the counters green, H3/H4/H5/H6
       are what remain, and the counters separate them.
+      Update (2026-11-18): the counters ran (see the capture update above)
+      and H1/H2/H5/H6 are out; H7 leads. The next loop's code work is
+      P3.24 (the unknown-frame content snapshot — the missing evidence)
+      and P3.25 (the read-protocol fix). After flashing that build, rerun
+      T5: the prediction to confirm or refute H7 is `frames sensor`
+      climbing at roughly the poll rate with `other` near zero, and
+      pointer/touch input reaching the laptop; if `other` persists, the
+      P3.24 snapshot names the content instead of the counters guessing.
       Closure: the tests that apply (T0–T6) recorded with their logs in
       `HW_REPORT.md`; one root cause named and linked to its fix (P3.23 for H1;
       a veroboard repair for H3; a new item for H4–H5 if confirmed); then P4.0
@@ -664,6 +796,10 @@ item names what needs the Pico W plugged in.
       frame); the interface guide only promises that reading a whole message
       works, so confirm on hardware that sensor-frame streaming is unaffected
       when the host clocks more bytes than the current frame contains.
+      (Update 2026-11-18: the first counter capture shows the worst case —
+      P4.0a hypothesis H7, other=100 % from the first poll. P3.25 ports the
+      Python driver's Size-field-sized reads to the Arduino driver; re-run
+      this check against the P3.25 build.)
       (P3.11c) the Raspberry Pi Python driver now sizes its reads from the
       frame's Size field and fetches frames longer than the first 26-byte
       read with chunked continuation reads (26 + 32 + 32 + 32 + 10 for the
@@ -702,6 +838,15 @@ item names what needs the Pico W plugged in.
       connection handling. The same log began with `ble_dropped`,
       `ble_advertising` and `waiting_for_host`, so a link drop happened before
       the first visible connection.
+      Session 4 (2026-11-19): the duplicate-connect behaviour is now captured
+      with clean timing from power-up — five `ble_resync`/`ble_connected`
+      pairs within the first 4 seconds of uptime (the sketch's connect
+      counter goes conn=1 → conn=5 across the first two health lines) with
+      ZERO `ble_dropped` between them, and uptime continuous (no reset, H5
+      ruled out for these). So the Bluetooth stack is reporting several
+      connection events in a row while the sketch sees no disconnect — see
+      P4.0a's 2026-11-19 update. Analysis and any fix stay deferred: the
+      sensor-side fault (H7) is the gate; handle this when P4.3 runs.
 - [ ] P4.4 Outer loop driver `ralph_hw.sh` + `HW_REPORT.md` protocol: run the
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
