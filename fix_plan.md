@@ -851,6 +851,13 @@ item names what needs the Pico W plugged in.
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
       on its next start once `HW_REPORT.md` exists.
+      Note (2026-11-19): the `ff5d36f` retirement of `HW_REPORT.md` broke
+      this handshake — `ralph.sh` refused to consume the `READY_FOR_HW`
+      marker without the file. `HW_REPORT.md` is recreated with the session-4
+      results (2026-11-18/19 counters, boot capture, TRFR voltage 15.4 mV;
+      failures F7 → P3.24/P3.25). The file is part of the protocol and must
+      be written for every hardware round; retiring it again would deadlock
+      the inner loop the same way.
 - [ ] P4.5 Manual checks: `AC-BLE-08` multi-OS smoke test and gesture feel
       tuning (`GAIN`, `JUMP_THRESHOLD`, `TOUCH_RELEASE_MS` — record final
       values back into `specs/hid_mapping.md` §3). Blocked by P4.0: tuning
