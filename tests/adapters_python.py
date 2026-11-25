@@ -68,6 +68,9 @@ class PythonDriverAdapter(ReplayAdapter):
         sky.gesture = 0
         sky.gesture_class = 0
         sky.gesture_edge = False
+        # Fix item P3.30: the raw SystemInfo byte is decoder state now
+        # (the Python counterpart of the Arduino driver's `last_sysinfo`).
+        sky.sysinfo = 0
         sky.system_status = 0
         sky.system_status_error = 0
         sky.fw_valid = 0

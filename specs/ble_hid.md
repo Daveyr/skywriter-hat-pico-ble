@@ -184,6 +184,13 @@ events are rare and print every one). The always-on health line now also
 carries `sysinfo=0xNN noise= clip=` — the latest sensor-data frame's
 SystemInfo byte and its two health bits — so the sensor's own health
 report is visible in every build (P4.0's hover-deafness hypothesis (g)).
+The Raspberry Pi Python driver surfaces the same byte for the sensor's
+native-platform cross-check (P3.30, 2026-11-25): every decoded
+sensor-data frame records the raw SystemInfo byte as the
+`skywriter.sysinfo` module state (the twin of the Arduino driver's
+`last_sysinfo`, set on every frame before the validity branches), so a
+registered handler — or the cross-check session — reads the health bits
+alongside the event arguments with no new hardware access.
 
 ## 7. Performance
 

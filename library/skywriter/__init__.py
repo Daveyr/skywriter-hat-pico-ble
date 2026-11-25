@@ -38,6 +38,16 @@ SW_DATA_TOUCH = 0b0000000000000100
 SW_DATA_AIRWHEEL = 0b0000000000001000
 SW_DATA_XYZ = 0b0000000000010000
 
+# SystemInfo byte fields (Interface.pdf §4.5, Table 4-10) — the sensor's
+# per-frame validity and health bits. The Arduino driver names the first
+# two SW_SYS_POSITION / SW_SYS_AIRWHEEL; the health bits are the sensor's
+# own report about its environment (fix item P3.30).
+SW_SYS_POSITION = 0b00000001     # bit 0: xyzPosition is valid
+SW_SYS_AIRWHEEL = 0b00000010     # bit 1: AirWheelInfo is valid
+SW_SYS_NOISE = 0b00010000        # bit 4: EnvironmentalNoise detected
+SW_SYS_CLIPPING = 0b00100000     # bit 5: the ADCs are clipping
+SW_SYS_DSP_RUNNING = 0b10000000  # bit 7: the sensor's DSP is running
+
 SW_SYSTEM_STATUS = 0x15
 SW_REQUEST_MSG = 0x06
 SW_FW_VERSION = 0x83
@@ -72,6 +82,19 @@ gesture = 0
 #   gesture_edge  — edge-flick flag, GestureInfo bit 16
 gesture_class = 0
 gesture_edge = False
+
+# Fix item P3.30: the RAW SystemInfo byte (Interface.pdf §4.5, Table 4-10)
+# of the last decoded sensor-data frame — module state like `gesture`, the
+# Python counterpart of the Arduino driver's `last_sysinfo` (P3.29).
+# Recorded on EVERY sensor-data frame, BEFORE the validity branches:
+# besides the validity bits (SW_SYS_POSITION / SW_SYS_AIRWHEEL /
+# SW_SYS_DSP_RUNNING) the byte carries the sensor's own health report —
+# SW_SYS_NOISE ("environmental noise has been detected") and
+# SW_SYS_CLIPPING ("the ADCs are clipping") — which must surface even
+# when no payload field is valid. Handlers read it alongside their own
+# arguments, like x/y/z; the P4.0 hover-deafness cross-check (hypothesis
+# (iii)) reads it on the sensor's native platform.
+sysinfo = 0
 
 # Last received control frames, decoded per Interface.pdf (the sensor's
 # datasheet): the System_Status acknowledge (§3.6 / Table 3-8) and the
@@ -181,10 +204,19 @@ class AsyncWorker(StoppableThread):
 def _handle_sensor_data(data):
     global _lastrotation, rotation
     global gesture, gesture_class, gesture_edge
+    global sysinfo
 
     d_configmask = data[0] | data[1] << 8
     # d_timestamp = data[2] (200hz, 8-bit counter, max ~1.25sec)
     d_sysinfo = data[3]
+
+    # Fix item P3.30: record the raw SystemInfo byte on EVERY sensor-data
+    # frame, before the validity branches (the Arduino driver's
+    # `last_sysinfo` rule, P3.29) — its health bits (SW_SYS_NOISE /
+    # SW_SYS_CLIPPING) must survive frames where no payload field is
+    # valid, which is exactly the reading the P4.0 hover-deafness
+    # cross-check needs.
+    sysinfo = d_sysinfo
 
     # d_dspstatus = data[4:6]
     d_gesture = data[6:10]
@@ -193,7 +225,7 @@ def _handle_sensor_data(data):
     d_xyz = data[16:24]
     # d_noisepow = data[24:28]
 
-    if d_configmask & SW_DATA_XYZ and d_sysinfo & 0b0000001:
+    if d_configmask & SW_DATA_XYZ and d_sysinfo & SW_SYS_POSITION:
         # We have xyz info, and it's valid
         x, y, z = (
             round((d_xyz[1] << 8 | d_xyz[0]) / 65536.0, _round_to),
@@ -322,7 +354,7 @@ def _handle_sensor_data(data):
                 # Python half of deviation D4, fix item P3.10).
             comp = comp >> 1
 
-    if d_configmask & SW_DATA_AIRWHEEL and d_sysinfo & 0b00000010:
+    if d_configmask & SW_DATA_AIRWHEEL and d_sysinfo & SW_SYS_AIRWHEEL:
         # Airwheel
         # The sensor counts rotation with a free-running 8-bit counter that
         # wraps 255->0 (32 counts = one revolution, so 1 count = 11.25
