@@ -567,6 +567,20 @@ docker run -it --rm \
     work item: the open items are P3.26 (closed this iteration), P3.27,
     P3.28 and P3.29. `bash run_tests.sh` green 4/4, 131 pytest tests; the
     SkywriterController sketch compiles at 22 % flash / 34 % RAM (unchanged).
+     Update (2026-11-25, P3.27 commit `b5e5a49`): the connect drain is
+     latched per link — the battery refresh + neutral resync report run
+     ONCE per link (the stack's opened callback fires once per
+     notification-enable write, four to five per connection), the latch
+     clears on link loss so the next link drains again, and the health
+     line's `ble conn=` counts real links instead of subscription
+     writes. specs/ble_hid.md §6 gained the P3.27 implementation note;
+     3 new source pins in tests/test_firmware_sketch.py (verified
+     failing against the unlatched sketch first); 134 pytest tests;
+     `run_tests.sh` green 4/4; the sketch compiles at 22 % flash / 34 %
+     RAM (unchanged). On hardware (next reflash): expect exactly ONE
+     battery notification + ONE neutral-report pair per connection in
+     the btmon capture, and `ble conn=` incrementing by one per link —
+     and remember the reflash/pairing caveat (re-pair on the laptop).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -686,21 +700,7 @@ evidence and verdicts in P4.0a's and P4.3's session-5 updates and the
 round's `HW_REPORT.md`)
 
 - [x] P3.26 → done, moved to the Done section below.
-- [ ] P3.27 **The connect drain runs once per link, not once per
-      subscription.** In plain language: a host "subscribes" to the
-      device's reports by writing one enable switch per report channel —
-      four or five writes per connection — and the core fires the opened
-      callback on EACH write, so the sketch's connect drain (battery
-      refresh + neutral resync report) ran four to five times per
-      single link (session 5's btmon capture: four report-subscription
-      writes, four battery notifications and four neutral-report pairs,
-      `conn=5` with `disc=0`). This retroactively explains sessions 2
-      and 4's "five `ble_connected`, zero `ble_dropped`" (one link,
-      five subscription writes) — the F4 duplicate-connect question is
-      closed as EXPLAINED. Fix: latch the drain per link (set on the
-      first opened event, cleared on the closed event) so the
-      battery/resync work runs once per link and the health line's
-      `ble conn=` counts real connections.
+- [x] P3.27 → done, moved to the Done section below (commit `b5e5a49`).
 - [ ] P3.28 **`SKYSTATE ble_dropped reason=0xNN`** — decode the HCI
       (Host Controller Interface, the radio-level event channel)
       disconnection-complete reason code in the sketch's existing event
@@ -1030,7 +1030,8 @@ item names what needs the Pico W plugged in.
         subscription writes, and session 5's `conn=5, disc=0` is the
         same thing. F4 is closed as EXPLAINED — no connection handling
         to change; the cosmetic fix is queued as P3.27 (latch the
-        drain per link).
+        drain per link; LANDED 2026-11-25, commit `b5e5a49` — see the
+        P3.27 Done entry).
       - **AC-BLE-06 (power-cycle bond persistence): PROBABLE PASS —
         the earlier failures were never the bond.** On a cold boot
         whose sensor gate passed, the laptop auto-connected BY ITSELF
@@ -1200,6 +1201,42 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.27 — the connect drain runs once per link, not once per
+  subscription write (commit `b5e5a49`). In plain language: when a
+  computer connects over Bluetooth Low Energy (BLE), it "subscribes" to
+  each report channel (pointer, buttons, wheel, keyboard, media) by
+  writing one small enable switch per channel — four or five writes per
+  connection — and the Bluetooth library fires the sketch's "opened"
+  callback after EACH write. The connect drain (battery refreshed to
+  100 % + the one neutral report that wipes the host's stale button
+  state) is a once-per-link action (specs/ble_hid.md §6 "once", §8), but
+  unlatched it ran after every write: hardware session 5's btmon capture
+  showed ONE link producing four battery notifications and four
+  neutral-report pairs, with the health line counting `ble conn=5
+  disc=0` for a single link (the same mechanism that produced sessions
+  2 and 4's "five connects, zero drops" — F4, closed EXPLAINED).
+  - The fix: a per-link latch `ble_connect_drain_latched` (volatile —
+    the stack's callback context writes it): `on_ble_opened` arms the
+    drain only on the link's FIRST opened event (guard → set → arm);
+    `on_ble_closed` clears the latch — the closed event precedes any
+    later link by definition, so the next connection always arms its own
+    drain; `loop()` never touches the latch (a loop-side clear between
+    two drains would reopen the storm).
+  - Effect: the battery/resync work runs once per link and the health
+    line's `ble conn=` counts real links — the number P4.3's life-cycle
+    probe reads. Hardware expectation after the next reflash: exactly
+    ONE battery notification + ONE neutral-report pair per connection
+    in btmon, `ble conn=` incrementing by one per link (with the
+    standing caveat: re-pair on the laptop after a reflash).
+  - Specs: no deviation — the spec's "once" was already correct and the
+    code was the wrong side; `ble_hid.md` §6 gained the P3.27
+    implementation note recording the latch and the on-air evidence.
+  - Test-first discipline held: 3 new source pins in
+    `tests/test_firmware_sketch.py` (the guard/set/arm order in
+    `on_ble_opened`, the single set/clear sites with loop() excluded,
+    the volatile declaration + the WHY/evidence comment) FAILED against
+    the unlatched sketch, pass now. 134 pytest tests; `run_tests.sh`
+    green 4/4; the sketch compiles at 22 % flash / 34 % RAM (unchanged).
 - P3.26 — the boot gate can never make the device invisible (commit
   `548e63b`): a failed sensor configuration is EVIDENCE and a RETRY,
   never a boot denial. In plain language: the controller used to refuse
