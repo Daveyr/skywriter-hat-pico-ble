@@ -1,13 +1,17 @@
-# HW_REPORT.md — hardware round 5 (2026-11-19/24, RESOLVED)
+# HW_REPORT.md — hardware round 5 (2026-11-19/25)
 
 The P4.4 protocol's record for this hardware round: what ran, each
 finding's verdict (F-numbers continue from round 4's F1–F7), the captured
 evidence, the root cause, and the human's next steps. The work ledger
 (`fix_plan.md`) carries the follow-up items this round opened —
-P3.26–P3.28 in its new §3g — and the updated item evidence. **The round
-is CLOSED (2026-11-24): the supply fault was found and fixed (F16) —
-the sensor streams on Pico power alone, the pairing bond is officially
-verified (F11), and the gesture acceptance run is unblocked.**
+P3.26–P3.28 in its new §3g, P3.29 in §3h — and the updated item
+evidence. **The supply saga is CLOSED (2026-11-24): the fault was
+found and fixed (F16) — the sensor streams on Pico power alone and
+the pairing bond is officially verified (F11). The acceptance run
+that followed is F17–F18: every close-range channel works, but
+hover-range motion has produced nothing so far — so the bench is
+parked (2026-11-25) and the development loop takes over next with
+P3.26–P3.29.**
 
 ## What ran
 
@@ -37,6 +41,11 @@ verified (F11), and the gesture acceptance run is unblocked.**
 - The fix (2026-11-24, same build, NO reflash): the part-broken
   solid-core 3V3 feed wire replaced with stranded wire, followed by a
   health capture on Pico power alone. Recorded as F16.
+- Acceptance-run sessions 1-2 (2026-11-25, same build, NO reflash,
+  ~9-9.3 h uptime, the link holding conn=5 disc=0 throughout): a
+  still-hand period; an AirWheel rotation attempt plus tapping at all
+  six edges; then tight circles in both directions at various hover
+  heights. Recorded as F17 and F18.
 
 ## Findings
 
@@ -398,37 +407,138 @@ scrolling):
   AirWheel events remain zero (untested — the wheel reports above are
   the auto-scroll rows, not rotation).
 
-## Resolution (2026-11-24) and what remains
+### F17 — acceptance session 1 (2026-11-25): still hand SILENT; rotation and taps register as touches only
+
+**Verdict: the still-hand case is a clean pass — the "noisy sensor"
+hypothesis is dead for it, and the sensor's host-facing output is
+event-driven, not a 200-per-second stream. The rotation and tap
+exercises produced touch events and button reports ONLY — zero
+AirWheel, zero keyboard, zero media — and the aggregate counters
+cannot say why (which zone a tap landed in, or whether the rotation
+ever reached a recognizer). That evidence gap opened P3.29.**
+
+Three exercises on the running build (~9 h uptime, link held
+conn=5 disc=0; the transfer accounting stayed exact all session,
+e.g. ts_low 506 = frames sensor 482 + other 24):
+
+- **Still hand (30 s): completely quiet.** Zero data-ready pulses,
+  zero frames, zero events, zero reports — no noise, no jitter, no
+  stuck buttons. This also settles the frame-rate question: the
+  earlier "~200 per second" expectation described the sensor's
+  internal sensing rate, not the bus — activity bursts run 5-20
+  frames/s and a still hand sends nothing.
+- **Rotation in the air + tapping all six edges (the active window):
+  touch +24, button transitions +42, everything else frozen** — zero
+  AirWheel events (`events wheel=0` still), zero wheel reports, zero
+  keyboard events, zero media events, position events frozen at 83.
+  The sensor configuration was verified against the vendor's own
+  tables first: the sketch's AirWheel-enable payload (0xA2/0x90, args
+  0x20/0x20) is byte-identical to the interface guide's own
+  "AirWheel Enable" command listing, and the data-output mask 0x1F
+  includes bit 3 (AirWheel) and bit 4 (position) — the sensor IS
+  configured for it. The datasheet's activation rule: "continuously
+  performed circles inside the sensing area", recognized "after at
+  least one quadrant of a circle".
+  - The touches firing during the rotation mean the fingers were in
+    TOUCH range and the touch recognizer took over.
+  - The taps: no touch event with a north/south zone dispatched in
+    ANY family — a north/south tap would Page Up/Down (key), a hold
+    would auto-scroll (wheel), a doubletap would track-skip (media);
+    all three counters are frozen. Those rows and the keyboard path
+    are replay-proven (fixtures F28/F29 + the P3.21 fix), so the gap
+    is upstream: the taps did not land (or did not classify) as
+    north/south touches — the 6-pin Skywriter's edge zones are only
+    millimetres wide, making missed taps the leading suspect, board
+    orientation second.
+  - **The pointer is still unproven**: position events stayed frozen
+    at 83 — no hover-MOVING exercise happened this session.
+
+### F18 — acceptance session 2 (2026-11-25): hover-range motion produced NOTHING — hover detection itself is the question
+
+**Verdict: tight circles in both directions at various hover heights
+produced ZERO output of any kind — not one data-ready pulse in 40+ s.
+The sensor is not registering hover-range presence AT ALL, so no
+recognizer (AirWheel, position, gesture) can even begin. AirWheel is
+DOWNSTREAM of this question and its verdict is deferred.**
+
+The pattern across every session since the wire fix:
+
+- Touch range always registers (700+ touch events accumulated).
+- Hover-range recognition has produced events exactly ONCE — the
+  first ~4 minutes of the 2026-11-24 boot (pos=83 + gest=1, likely
+  whole-hand movement) — never again in 10+ hours.
+- Both deliberate hover exercises since: rotation at touch range →
+  touches; rotation at hover range → silence.
+
+Hypotheses, in test order (P4.0's new hypothesis (g)):
+
+1. **The tested motion is below the hover-detection envelope** — a
+   fingertip making tight circles is a small electrical target; the
+   one working window was likely whole-hand movement. Test: flat
+   OPEN PALM, slow sweeps and circles at 2-10 cm — watch
+   `events pos` (this doubles as the still-unproven pointer test).
+2. **Baseline drift with auto-calibration disabled** (the sketch
+   sends the Python driver's default disable command): long-range
+   approach detection is the first function to go deaf when the
+   baseline drifts, while short-range touch keeps working. Test: if
+   the palm fails, power-cycle the Pico (safe now — the supply is
+   fixed and the bond survives power cycles) and palm-sweep
+   IMMEDIATELY.
+3. **Environmental noise or a setup limit** — the sensor's own
+   SystemInfo word carries EnvironmentalNoise (bit 4) and Clipping
+   (bit 5) health bits that NEITHER driver currently surfaces; they
+   may name the cause directly once P3.29 prints them. If hover
+   fails even fresh-booted, the Raspberry Pi cross-check with the
+   stock Python driver (the sensor's native platform) decides
+   our-setup vs the sensor/board.
+
+## Resolution and handoff (updated 2026-11-25)
 
 The supply fault is FIXED (F16): the part-broken solid-core 3V3 feed
 wire is replaced with stranded wire and the sensor streams on Pico
-power alone. The bench steps previously listed here were superseded by
-F15's re-localisation (the header contact was never the fault) and
-F16's fix — the reflow/Pi-HAT options (old steps 3–4) never applied
-and were never executed; the T5 rerun (old step 5) is done (F16's
-capture); the Raspberry Pi cross-check (old step 6) is not needed.
+power alone. The old bench steps (reflow the socket, the withdrawn
+Pi-HAT "second 3V3 position" advice) never applied — F15's rail
+measurement exonerated the header and F16 found the fault in the feed
+wire.
 
-What remains is the P4.0 gesture acceptance run (NO reflash needed —
-keep the current build and the laptop's fresh pairing), serial monitor
-plus the laptop-side capture (`evtest` or `hid-recorder` — the
-T4-style evidence P4.0's diagnosis wants):
+The gesture acceptance run then began (F17–F18, 2026-11-25): the
+still-hand case is clean, every close-range touch channel works
+end-to-end (touches → button reports at the laptop), and the pairing
+link has held for nine-plus hours — but hover-range motion has
+produced nothing yet. The pointer channel is still unproven and the
+AirWheel verdict is deferred behind the hover-detection question.
 
-1. **Hover-move**: hold a hand a few centimetres above the sensor and
-   move it slowly — expect `events pos` AND `hid pointer` climbing
-   together, the cursor smooth, in the correct direction and axis.
-   This is the first thing to confirm (today's capture has position
-   events but zero pointer reports — a still hand).
-2. **Taps per zone**: center → left click, east → right, west →
-   middle, north → Page Up, south → Page Down (no letters — the
-   P3.21 fix), doubletap north/south → track skip.
-3. **AirWheel**: rotate a finger steadily over the center — expect
-   `events wheel` climbing (zero so far — untested; the wheel reports
-   captured today are the touch-hold auto-scroll rows, not rotation).
-4. **Flicks**: expect `key`/`media` reports (already counting).
-5. If convenient, capture the AC-BLE-04 latency evidence in the same
-   session (hand movement vs cursor movement timestamps).
+**The bench is parked here (2026-11-25); the development loop takes
+over next** — the first open items are P3.26–P3.29 (the boot-gate
+retry, the connect-drain dedupe, the link-loss reason line, and the
+per-event evidence line). When the hardware resumes:
 
-## Work items this round opened (fix_plan.md §3g)
+1. **Palm sweep first** (F18's discriminators, in order): flat open
+   palm, slow sweeps and circles at 2-10 cm — expect `events pos` and
+   `hid pointer` climbing together (this is also the still-unproven
+   pointer test). Palm circles inside the working envelope are then
+   the AirWheel retry, with `events touch` staying frozen this time.
+2. **Palm deaf → power-cycle the Pico and palm-sweep immediately**
+   (fresh calibration; safe now — the supply is fixed and the bond
+   survives power cycles; expect `sensor_ok` and the laptop
+   reconnecting by itself). Works fresh then fades = calibration
+   drift → open a work item on the auto-calibration default; deaf
+   even fresh → step 3.
+3. **Still deaf → the Raspberry Pi cross-check** with the stock
+   Python driver on its native platform: streams on a Pi = our
+   setup; deaf on a Pi too = the sensor board or its environment.
+4. **Tap zones**: one physical edge at a time with `evtest` or
+   `hid-recorder` on the laptop, noting which action fires (the
+   aggregate counters cannot say which zone a tap landed in) — on
+   the P3.29 build the device-side event line answers the same
+   question directly.
+5. If convenient, flash the P3.26–P3.29 build before that session (it
+   carries the per-event line and the sensor-health bits) — and
+   after ANY reflash, expect to re-pair on the laptop (the recorded
+   caveat). Capture the AC-BLE-04 latency evidence in the same
+   session if it runs.
+
+## Work items this round opened (fix_plan.md §3g/§3h)
 
 - **P3.26** — the boot gate must never make the device invisible:
   retry the sensor configuration until success, use the reference reset
@@ -439,8 +549,15 @@ T4-style evidence P4.0's diagnosis wants):
   real connections. Closes F4's mystery for good.
 - **P3.28** — `SKYSTATE ble_dropped reason=0xNN`: the device-side link
   loss reason code, so the next bounce names itself without btmon.
+- **P3.29** (§3h, opened 2026-11-25 from the acceptance sessions) —
+  the per-event evidence line: each dispatched event printed compactly
+  (kind + touch code/zone + position + the AirWheel flag + the raw
+  SystemInfo byte, whose EnvironmentalNoise and Clipping health bits
+  no driver currently surfaces) — the device-side twin of the
+  laptop-side evtest capture, because the acceptance sessions hit
+  zone-level questions the aggregate counters cannot answer.
 
-No further items were opened by the round's closing captures
-(2026-11-23/24): everything observed is expected behaviour or already
-covered by P4.0 (the acceptance run) and P4.3 (whose AC-BLE-06 part is
-now an official pass).
+No further items were opened by the 2026-11-23/24 closing captures
+(everything observed was expected behaviour or already covered by
+P4.0 and P4.3, whose AC-BLE-06 part is now an official pass); the
+2026-11-25 acceptance sessions then opened P3.29 above.

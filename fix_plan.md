@@ -718,6 +718,32 @@ round's `HW_REPORT.md`)
       (0x06 key missing = the reflash-orphaned pairing; 0x13/0x16 = the
       host aborted; 0x08 = supervision timeout).
 
+### 3h — Acceptance-run items (opened 2026-11-25 from the first P4.0
+acceptance session; evidence in P4.0's 2026-11-25 update)
+
+- [ ] P3.29 **A per-event evidence line for the acceptance run.** In
+      plain language: the health line's aggregate counters proved
+      which CHANNELS are alive, but the 2026-11-25 acceptance session
+      hit two questions they cannot answer — which ZONE a tap landed
+      in (every tap produced button clicks and none produced the Page
+      Up/Down keys, and the counters cannot say whether the sensor
+      never sent a north/south touch code or sent one that was
+      mishandled) and whether the rotation attempt ever produced
+      AirWheel-valid data. Add a compile-time-gated serial line that
+      prints each dispatched event compactly (kind + touch code/zone
+      + position values + the AirWheel-valid flag/counter + the raw
+      SystemInfo byte), off by default or rate-limited so the
+      200 Hz position path stays quiet, enabled for acceptance-run
+      builds; pin it source-level like the existing sketch pins.
+      The SystemInfo byte matters beyond validity gating: its
+      EnvironmentalNoise (bit 4) and Clipping (bit 5) bits are the
+      sensor's own health report, currently surfaced by NEITHER
+      driver — they may name the 2026-11-25 hover-deafness cause
+      directly (hypothesis (g) in P4.0). The line is the
+      device-side twin of the laptop-side evtest/hid-recorder capture
+      (P4.0's step 3): together they make every zone/technique
+      question decidable without guessing.
+
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
 The container can *write* these files but only the host can *run* them. Each
@@ -742,6 +768,106 @@ item names what needs the Pico W plugged in.
       (`events wheel=0` — the wheel reports seen come from the §6
       touch-hold auto-scroll rows); compare a sustained hover's frame
       rate against the ~200/s expectation.
+      Acceptance session 1 (2026-11-25, current build `2267497`, ~9 h
+      uptime, link held conn=5 disc=0 throughout — its longest run on
+      record; the transfer accounting stayed exact the whole session,
+      e.g. ts_low 506 = sensor 482 + other 24). Three exercises; the
+      counters cannot separate the rotation and tapping exercises
+      inside the active window, so their deltas are reported together:
+      - **Still hand (30 s): completely quiet.** Zero data-ready
+        pulses, zero frames, zero events, zero reports — no noise, no
+        jitter, no stuck buttons. Hypothesis (a) is dead for the still
+        case: a still (or absent) hand generates nothing at all. It
+        also settles the frame-rate question: the host-facing output
+        is EVENT-DRIVEN — the earlier "~200/s streaming" expectation
+        described the sensor's internal sensing rate, not the bus
+        (2026-11-24's activity bursts ran 5-20 frames/s; a still hand
+        sends nothing).
+      - **Rotation in the air + tapping all six edges (the active
+        window): touch +24, button transitions +42, everything else
+        FROZEN** — zero AirWheel events (`events wheel=0` still),
+        zero wheel reports, zero keyboard events, zero media events,
+        position events frozen at 83.
+        - AirWheel: the sensor configuration is now verified against
+          the vendor's own table — the sketch's AirWheel-enable
+          payload (0xA2/0x90, args 0x20/0x20) is byte-identical to
+          Interface.pdf's own "AirWheel Enable" command listing, and
+          the data-output mask 0x1F includes bit 3 (AirWheel) and
+          bit 4 (position). The datasheet's activation rule:
+          "continuously performed circles inside the sensing area",
+          recognized "after at least one quadrant of a circle". The
+          touches firing during the attempt mean the fingers were in
+          TOUCH range and the touch recognizer took over. Next
+          technique: hover over the centre WITHOUT touching and
+          rotate one full continuous circle — the goal is a rotation
+          with `events touch` staying frozen. Interpretation note
+          from the interface guide: while AirWheel is enabled and
+          active the sensor disables position output, so frozen pos
+          during a WORKING rotation is expected — frozen pos alone is
+          not evidence of AirWheel.
+        - Edge taps: no touch event with a north/south zone
+          dispatched in ANY family — a north/south tap would send
+          Page Up/Down (key), a hold would auto-scroll (wheel), a
+          doubletap would track-skip (media); all three counters are
+          frozen. The rows and the keyboard path are replay-proven
+          (fixtures F28/F29 + the P3.21 fix), so the gap is upstream:
+          the taps did not land (or did not classify) as north/south
+          touches — the 6-pin Skywriter's edge zones are only
+          millimetres wide, making missed taps the leading suspect,
+          board orientation second. The aggregate counters cannot
+          separate those: run the per-edge laptop-side check (one
+          physical edge at a time, evtest or hid-recorder, note which
+          action fires), and P3.29 adds the device-side per-event
+          evidence line.
+      - **The pointer is STILL the unproven channel** — no
+        hover-MOVING exercise happened this session. It remains the
+        top item: hold a hand a few centimetres up and move it;
+        expect `events pos` AND `hid pointer` climbing together.
+      Acceptance session 1, second exercise (2026-11-25, same boot,
+      ~9.3 h uptime): **tight circles in both directions at various
+      hover heights — and the sensor sent NOTHING: zero data-ready
+      pulses in 40+ s** (ts_low, frames, touch and pos all frozen).
+      This reframes the AirWheel question: the sensor is not
+      registering hover-range presence AT ALL, so no recognition
+      (AirWheel or otherwise) can even begin. The pattern across all
+      sessions: touch-range activity always registers (700+ touch
+      events); hover-range recognition has produced events exactly
+      ONCE — the first ~4 minutes of the 2026-11-24 boot (pos=83 +
+      gest=1, likely whole-hand motion) — never again in 10+ h; both
+      deliberate hover exercises (rotation at touch range → touches;
+      rotation at hover range → silence) produced zero position or
+      gesture events. Hypotheses, in test order:
+      - (i) **The tested motion is below the sensor's hover-detection
+        envelope** — a fingertip making tight circles is a small
+        target; the one working window was likely whole-hand
+        movement. Discriminator: flat OPEN PALM, slow sweeps and
+        circles at 2-10 cm — watch `events pos` (this doubles as the
+        pointer test: expect `hid pointer` climbing too).
+      - (ii) **Baseline drift with auto-calibration disabled** (the
+        sketch sends the Python driver's default
+        disable-auto-calibration command): long-range approach
+        detection is the first function to go deaf when the baseline
+        drifts while short-range touch keeps working — matching the
+        observed pattern IF the palm test also fails. Discriminator:
+        power-cycle the Pico (safe now — the supply is fixed and the
+        bond survives power cycles, AC-BLE-06 officially passed;
+        expect `sensor_ok` and the laptop reconnecting by itself),
+        then IMMEDIATELY palm-sweep. Fresh-boot hover that works and
+        later fades = drift → open a work item on the calibration
+        default; fresh-boot hover that also fails = go to (iii).
+      - (iii) **Environmental noise or a detection-limit problem in
+        the sensor's environment/setup** — the sensor's own
+        SystemInfo word carries EnvironmentalNoise (bit 4) and
+        Clipping (bit 5) health bits that NEITHER driver currently
+        surfaces (P3.29's evidence line will print them). If palm
+        hover fails even fresh-booted, the Raspberry Pi cross-check
+        with the stock Python driver (the sensor's native platform)
+        decides our-config vs the sensor/board, with P3.29's event
+        line and P4.6's real-frame capture as the instruments.
+      AirWheel verdict is DEFERRED until hover detection works: both
+      attempts so far never reached the recognizer (touch range → the
+      touch recognizer took over; hover range → nothing was seen at
+      all).
       Reported symptoms (session 1, Linux/BlueZ laptop): the cursor jumps or
       teleports; it moves the wrong way or along the wrong axis; keyboard and
       media keys fire. Clicks and scrolling were not listed as symptoms. The
@@ -773,7 +899,13 @@ item names what needs the Pico W plugged in.
       configuration or frame-read problem (P3.11b/c, P3.16) corrupting
       positions; (f) spurious flick or circle gestures from sensor noise
       firing the track and volume keys (the media-key symptom — check with the
-      channel-separation step: flicks alone, then a still hand).
+      channel-separation step: flicks alone, then a still hand);
+      (g) hover-detection deafness — the sensor not registering
+      hover-range presence at all (fingertip below the detection
+      envelope, baseline drift with auto-calibration disabled, or
+      environmental noise per the sensor's own SystemInfo bits) —
+      added 2026-11-25, see the acceptance session notes (where (a)
+      is already dead for the still-hand case).
       Closure: the cursor moves smoothly and in the expected direction; no
       clicks or scrolls happen unless a deliberate gesture is made; the cause
       is recorded in `HW_REPORT.md` with the captured logs. If the firmware
