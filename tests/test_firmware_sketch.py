@@ -541,6 +541,97 @@ def test_connect_drain_latch_is_documented_with_its_evidence():
             "session-5 evidence belong next to the mechanism")
 
 
+# ------------------------------------- P3.28: the link-loss reason line ----
+# (Session 5's connect/disconnect bounce was root-caused and fixed host-side
+# before the failing link's HCI reason code was ever captured — the btmon
+# trace recorded the SUCCESSFUL pairing instead. Every future link loss
+# must be able to name its own cause from the device side: 0x06 PIN or Key
+# Missing = the reflash-orphaned pairing; 0x13/0x16 = the host or the local
+# side terminated the connection; 0x08 = the supervision timeout (the
+# connection watchdog decided the peer was gone). The wrapper's closed
+# callback fires ON the HCI_EVENT_DISCONNECTION_COMPLETE event, and BTstack
+# dispatches handlers in registration order, so the sketch's own HCI event
+# handler (registered before begin()) sees the event BEFORE the closed
+# callback arms the disconnect drain — the reason is already stored when
+# loop() prints the dropped line.)
+
+def test_ble_drop_reason_is_decoded_in_the_hci_event_handler():
+    """P3.28: the sketch's BTstack HCI event handler decodes the HCI
+    (Host Controller Interface — the radio-level event channel)
+    Disconnection Complete event's reason code and stores it as public
+    state for loop() — the radio-context rule stays: the handler only
+    records, never prints, never touches the mapper."""
+    body = function_body("on_hci_event")
+    assert "HCI_EVENT_DISCONNECTION_COMPLETE" in body, (
+        "the disconnection-complete event must be decoded in the HCI "
+        "event handler")
+    assert "hci_event_disconnection_complete_get_reason(" in body, (
+        "the reason code must come from the event-decoding helper, not "
+        "a hand-rolled byte offset")
+    # Whitespace-tolerant: the assignment may wrap across lines.
+    stored = " ".join(body.split())
+    assert "ble_drop_reason = hci_event_disconnection_complete_get_reason(" \
+        in stored, "the decoded reason must be stored"
+    assert "ble_drop_reason_seen = true" in body, (
+        "a seen-flag must mark the reason as real event evidence")
+    # flag-only radio context, same rule as on_ble_opened/on_ble_closed.
+    assert "Serial." not in body, (
+        "the HCI handler must not print (the stack's callback context)")
+    assert "mapper." not in body
+
+
+def test_ble_drop_reason_state_is_volatile_and_latest_wins():
+    """The reason state is written from the stack's callback context, so it
+    is volatile; the snapshot is latest-wins (the twin of P3.24's
+    unknown-frame snapshot) — it is NOT reset by the drain."""
+    src = sketch_source()
+    assert "volatile uint8_t ble_drop_reason" in src
+    assert "volatile bool ble_drop_reason_seen" in src
+    body = function_body("loop")
+    assert "ble_drop_reason = 0" not in body, (
+        "the drain must not reset the reason — latest-wins evidence, "
+        "not one-shot")
+
+
+def test_ble_dropped_line_carries_the_reason_code_and_name():
+    """The disconnect drain's evidence line names WHY the link dropped:
+    `SKYSTATE ble_dropped reason=0xNN <name>` — hex zero-padded, with the
+    event's absence reported honestly (defensive: a link loss always
+    produces a disconnection-complete event, but the line must not print a
+    fake 0x00 if one was never seen)."""
+    loop_body = function_body("loop")
+    assert "SKYSTATE ble_dropped reason=" in loop_body, (
+        "the dropped line must carry the reason")
+    assert "ble_drop_reason_seen" in loop_body, (
+        "the line must distinguish a real reason code from 'no event seen'")
+    assert re.search(r"<\s*0x10.*Serial\.print\('0'\)", loop_body), (
+        "the reason hex must print zero-padded")
+    assert "ble_drop_reason_name(" in loop_body, (
+        "the reason code must be paired with its human-readable name")
+
+
+def test_ble_drop_reason_names_cover_the_ledger_codes():
+    """The name helper covers the codes the work ledger names (0x06 key
+    missing = the reflash-orphaned pairing; 0x13/0x16 = the host or local
+    side terminated; 0x08 = supervision timeout) and answers 'unknown' for
+    every other code — never an empty name."""
+    body = function_body("ble_drop_reason_name")
+    for code in ("0x06", "0x08", "0x13", "0x16"):
+        assert f"case {code}:" in body, f"reason {code} must be named"
+    assert "unknown" in body
+
+
+def test_drop_reason_line_printed_from_loop_not_from_the_callback():
+    """The reason print runs in the loop context (alongside the dropped
+    lines, per the item) — the callback stays flag-only."""
+    loop_body = function_body("loop")
+    assert "SKYSTATE ble_dropped reason=" in loop_body
+    dropped_at = loop_body.index("SKYSTATE ble_dropped reason=")
+    advertising_at = loop_body.index("SKYSTATE ble_advertising")
+    assert dropped_at < advertising_at, (
+        "the reason line is part of the dropped-lines group")
+
+
 # ------------------------------------- P3.18: §7 performance (AC-BLE-04) ---
 # (Move-report pacing at the LIVE BLE connection interval, with the host's
 # negotiated parameters tracked by the sketch's own BTstack HCI event

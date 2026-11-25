@@ -581,6 +581,14 @@ docker run -it --rm \
      battery notification + ONE neutral-report pair per connection in
      the btmon capture, and `ble conn=` incrementing by one per link —
      and remember the reflash/pairing caveat (re-pair on the laptop).
+    Update (2026-11-25, P3.28 commit): the `SKYSTATE ble_dropped` line now
+    names WHY the link dropped — the radio's own disconnection reason code
+    plus a human-readable name (`reason=0x13 remote_user_terminated`,
+    `reason=0x06 key_missing`, …) — and the `specs/ble_hid.md` §6 Link-loss
+    row gained the matching implementation note. The remaining §3g item is
+    P3.29; on hardware (next reflash): after any link loss, the dropped
+    line itself says the cause — check it against btmon's own
+    disconnection report and remember the re-pair-after-reflash caveat.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -701,17 +709,7 @@ round's `HW_REPORT.md`)
 
 - [x] P3.26 → done, moved to the Done section below.
 - [x] P3.27 → done, moved to the Done section below (commit `b5e5a49`).
-- [ ] P3.28 **`SKYSTATE ble_dropped reason=0xNN`** — decode the HCI
-      (Host Controller Interface, the radio-level event channel)
-      disconnection-complete reason code in the sketch's existing event
-      handler and print it from `loop()` alongside the dropped lines —
-      the Bluetooth-side twin of P3.24's unknown-frame snapshot.
-      Evidence: session 5's connect/disconnect bounce was fixed
-      host-side before its reason code was ever captured (the btmon
-      trace recorded the SUCCESSFUL pairing instead), so future link
-      losses must be able to name their own cause from the device side
-      (0x06 key missing = the reflash-orphaned pairing; 0x13/0x16 = the
-      host aborted; 0x08 = supervision timeout).
+- [x] P3.28 → done, moved to the Done section below.
 
 ### 3h — Acceptance-run items (opened 2026-11-25 from the first P4.0
 acceptance session; evidence in P4.0's 2026-11-25 update)
@@ -1201,6 +1199,59 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.28 — the link-loss line names its own cause (this commit): the
+  `SKYSTATE ble_dropped` serial line now carries the radio's own
+  disconnection reason code plus a human-readable name —
+  `SKYSTATE ble_dropped reason=0x13 remote_user_terminated` — the
+  Bluetooth-side twin of P3.24's unknown-frame snapshot. In plain
+  language: when the wireless link to the laptop dies, something decides
+  to end it — the laptop's user turning Bluetooth off, a stale pairing
+  key after a firmware reflash, a watchdog that decided the other end had
+  vanished. The radio reports its decision with a standard two-digit
+  code, and until now the device printed "dropped" without saying why.
+  Hardware session 5's connect/disconnect bounce was root-caused and
+  fixed host-side before its reason code was ever captured (the btmon
+  trace recorded the successful pairing instead); P3.28 makes every
+  future link loss self-naming from the device side.
+  - Where the code comes from: the sketch's existing BTstack HCI (Host
+    Controller Interface — the radio-level event channel) event handler
+    gained a case for the Disconnection Complete event and stores the
+    reason through the stack's own decoding helper
+    (`hci_event_disconnection_complete_get_reason`) into volatile state
+    (`ble_drop_reason` + `ble_drop_reason_seen`) — written only from the
+    stack's callback context, latest-wins, never reset (the drain does
+    not clear it, so the next health line still reflects the last loss).
+    BTstack dispatches event handlers in registration order and the
+    wrapper's closed callback fires ON this same event, so the reason is
+    always stored before `on_ble_closed` arms the disconnect drain that
+    prints it. The handler stays flag-only (no printing, no mapper calls
+    — the context rule).
+  - The line: loop()'s disconnect drain prints `SKYSTATE ble_dropped
+    reason=0xNN <name>` with zero-padded hex and the name from a small
+    helper covering the ledger's codes — 0x06 `key_missing` (stale
+    pairing, the reflash-orphaned bond), 0x08 `connection_timeout` (the
+    supervision watchdog), 0x13 `remote_user_terminated` (the HOST ended
+    the link), 0x16 `local_host_terminated` (this side ended it), 0x22
+    `ll_response_timeout`, 0x3e `connection_failed_establish`, anything
+    else `unknown`. Defensively, if no disconnection event was ever seen
+    the line prints `reason=none no_hci_disconnection_event` rather than
+    a fake 0x00.
+  - Specs: no deviation — `specs/ble_hid.md` §6's Link-loss row says
+    "report state to the serial console"; the row gained the P3.28
+    implementation note recording the line format and the latest-wins
+    semantics.
+  - Test-first discipline held: 5 new source pins in
+    `tests/test_firmware_sketch.py` (the handler decodes the event
+    through the stack helper and stores it flag-only; the volatile
+    declaration + latest-wins no-reset; the dropped line carries the
+    zero-padded reason and name from loop() ahead of the advertising
+    line; the named codes 0x06/0x08/0x13/0x16 exist with an `unknown`
+    fallback) all FAILED against the pre-P3.28 sketch, pass now. 139
+    pytest tests; `bash run_tests.sh` green 4/4; the sketch compiles at
+    22 % flash / 34 % RAM (unchanged). On hardware (next reflash): after
+    any link loss, read the cause off the dropped line and cross-check
+    it against btmon's own disconnection report — and remember the
+    standing caveat: re-pair on the laptop after a reflash.
 - P3.27 — the connect drain runs once per link, not once per
   subscription write (commit `b5e5a49`). In plain language: when a
   computer connects over Bluetooth Low Energy (BLE), it "subscribes" to

@@ -41,7 +41,11 @@
     connection as several "opened" events (one per report-channel
     subscription write), a per-link latch keeps the drain to a single run,
     and the health line's `ble conn=` counts links, not subscription
-    writes.
+    writes. And since fix item P3.28 the `SKYSTATE ble_dropped` line names
+    WHY the Bluetooth link ended — the radio's own disconnection reason
+    code (e.g. 0x06 = a stale pairing after a reflash, 0x08 = the
+    connection watchdog gave up, 0x13 = the host ended the link) — the
+    evidence session 5's bounce investigation had to fix host-side without.
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -839,6 +843,25 @@ static void on_ble_closed(uint8_t type, uint16_t channel, uint8_t* packet,
 // Handlers stay flag-only (same context rule as on_ble_opened above): the
 // negotiated interval is stored and loop() reprograms the engine.
 //
+// P3.28: the same handler also decodes the HCI Disconnection Complete
+// event — the radio-level record of a link ending, carrying the standard
+// reason code for WHY it ended. The wrapper's "closed" callback fires on
+// this same event (see PicoBluetoothBLEHID's packetHandler), and BTstack
+// dispatches event handlers in registration order, so this handler —
+// registered before the radio starts — stores the reason BEFORE
+// on_ble_closed arms the disconnect drain that prints it. The reason code
+// is what names a link loss from the device side: hardware session 5's
+// post-reflash bounce was fixed host-side before its reason was ever
+// captured (the btmon trace recorded the successful pairing instead), so
+// every future loss names itself: 0x06 PIN or Key Missing = a stale
+// pairing (e.g. a reflash orphaned the Pico's stored bond while the host
+// kept hers), 0x08 Connection Timeout = the connection watchdog decided
+// the peer was gone, 0x13 Remote User Terminated Connection = the HOST
+// ended the link, 0x16 Connection Terminated By Local Host = this side
+// ended it. Like P3.24's unknown-frame snapshot, the stored reason is
+// latest-wins: it is never reset, so the next health line still shows
+// what the last loss was.
+//
 // Additionally, on connection the sketch ASKS the host to keep the
 // interval inside [7.5, 15] ms (units: 6..12 × 1.25 ms) — the window that
 // keeps the ≥ 60 Hz pointer-rate floor of AC-BLE-04 possible even if the
@@ -867,43 +890,82 @@ static btstack_packet_callback_registration_t hci_event_registration;
 static volatile bool ble_pace_dirty = false;
 static volatile uint16_t ble_pace_units = 0;
 
+// P3.28: the reason the last Bluetooth link ended, as the radio itself
+// reported it. Both are written only from the stack's callback context
+// (hence volatile), latest-wins, and printed by loop()'s disconnect drain
+// on the `SKYSTATE ble_dropped` line — the device-side answer to "why did
+// the link drop?" that session 5's report could not give.
+static volatile bool ble_drop_reason_seen = false;
+static volatile uint8_t ble_drop_reason = 0;
+
+// Human-readable name for an HCI error code. The codes that matter for
+// this project's diagnosis are named; anything else answers "unknown" —
+// never an empty or misleading name.
+static const char* ble_drop_reason_name(uint8_t reason) {
+  switch (reason) {
+    case 0x06: return "key_missing";            // PIN or Key Missing —
+                                                // stale pairing (reflash)
+    case 0x08: return "connection_timeout";     // Connection Timeout —
+                                                // supervision watchdog
+    case 0x13: return "remote_user_terminated"; // the HOST ended the link
+    case 0x16: return "local_host_terminated";  // THIS side ended the link
+    case 0x22: return "ll_response_timeout";    // peer stopped answering
+    case 0x3e: return "connection_failed_establish";
+    default:   return "unknown";
+  }
+}
+
 static void on_hci_event(uint8_t packet_type, uint16_t channel,
                          uint8_t* packet, uint16_t size) {
   if (packet_type != HCI_EVENT_PACKET || packet == nullptr) return;
-  if (hci_event_packet_get_type(packet) != HCI_EVENT_LE_META) return;
-  switch (hci_event_le_meta_get_subevent_code(packet)) {
-    case HCI_SUBEVENT_LE_CONNECTION_COMPLETE: {
-      if (hci_subevent_le_connection_complete_get_status(packet) !=
-          ERROR_CODE_SUCCESS) {
-        return;  // a failed connection attempt carries no interval to use
+  switch (hci_event_packet_get_type(packet)) {
+    case HCI_EVENT_LE_META:
+      switch (hci_event_le_meta_get_subevent_code(packet)) {
+        case HCI_SUBEVENT_LE_CONNECTION_COMPLETE: {
+          if (hci_subevent_le_connection_complete_get_status(packet) !=
+              ERROR_CODE_SUCCESS) {
+            return;  // a failed connection attempt carries no interval to use
+          }
+          uint16_t interval =
+              hci_subevent_le_connection_complete_get_conn_interval(packet);
+          if (interval == 0) return;
+          ble_pace_units = interval;
+          ble_pace_dirty = true;
+          // §7/AC-BLE-04: ask for the fast window (may be declined; see the
+          // section comment). No HID send API involved — stack request only.
+          gap_request_connection_parameter_update(
+              hci_subevent_le_connection_complete_get_connection_handle(
+                  packet),
+              PACE_MIN_INTERVAL_UNITS, PACE_MAX_INTERVAL_UNITS, 0,
+              PACE_SUPERVISION_TIMEOUT_UNITS);
+          return;
+        }
+        case HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE: {
+          if (hci_subevent_le_connection_update_complete_get_status(packet) !=
+              ERROR_CODE_SUCCESS) {
+            return;  // the host declined the parameters — the old pace stands
+          }
+          uint16_t interval =
+              hci_subevent_le_connection_update_complete_get_conn_interval(
+                  packet);
+          if (interval == 0) return;
+          ble_pace_units = interval;
+          ble_pace_dirty = true;
+          return;
+        }
+        default:
+          return;  // every other LE subevent is irrelevant to report pacing
       }
-      uint16_t interval =
-          hci_subevent_le_connection_complete_get_conn_interval(packet);
-      if (interval == 0) return;
-      ble_pace_units = interval;
-      ble_pace_dirty = true;
-      // §7/AC-BLE-04: ask for the fast window (may be declined; see the
-      // section comment). No HID send API involved — stack request only.
-      gap_request_connection_parameter_update(
-          hci_subevent_le_connection_complete_get_connection_handle(packet),
-          PACE_MIN_INTERVAL_UNITS, PACE_MAX_INTERVAL_UNITS, 0,
-          PACE_SUPERVISION_TIMEOUT_UNITS);
+    case HCI_EVENT_DISCONNECTION_COMPLETE:
+      // P3.28: store WHY the radio ended the link (see the section
+      // comment). Loop()'s disconnect drain prints it — this context
+      // only records.
+      ble_drop_reason =
+          hci_event_disconnection_complete_get_reason(packet);
+      ble_drop_reason_seen = true;
       return;
-    }
-    case HCI_SUBEVENT_LE_CONNECTION_UPDATE_COMPLETE: {
-      if (hci_subevent_le_connection_update_complete_get_status(packet) !=
-          ERROR_CODE_SUCCESS) {
-        return;  // the host declined the parameters — the old pace stands
-      }
-      uint16_t interval =
-          hci_subevent_le_connection_update_complete_get_conn_interval(packet);
-      if (interval == 0) return;
-      ble_pace_units = interval;
-      ble_pace_dirty = true;
-      return;
-    }
     default:
-      return;  // every other LE subevent is irrelevant to report pacing
+      return;  // every other event type is irrelevant to this handler
   }
 }
 
@@ -1016,7 +1078,23 @@ void loop() {
     MouseBLE.release(MOUSE_ALL);
     KeyboardBLE.releaseAll();
     ble_disconnects++;
-    Serial.println("SKYSTATE ble_dropped");
+    // P3.28: the dropped line names WHY the radio ended the link — the
+    // HCI reason code the event handler stored (zero-padded hex, plus the
+    // human-readable name), latest-wins like P3.24's snapshot. If no
+    // disconnection-complete event was ever seen (defensive — a link loss
+    // always produces one), the line says so instead of printing a fake
+    // 0x00.
+    Serial.print("SKYSTATE ble_dropped reason=");
+    if (ble_drop_reason_seen) {
+      Serial.print("0x");
+      if (ble_drop_reason < 0x10) Serial.print('0');
+      Serial.print(ble_drop_reason, HEX);
+      Serial.print(' ');
+      Serial.print(ble_drop_reason_name(ble_drop_reason));
+    } else {
+      Serial.print("none no_hci_disconnection_event");
+    }
+    Serial.println();
     Serial.println("SKYSTATE ble_advertising");
   }
 

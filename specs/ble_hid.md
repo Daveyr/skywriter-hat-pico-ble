@@ -150,6 +150,22 @@ Hardware session 5's btmon capture recorded the unlatched shape this note
 forbids: one link, four battery notifications, four neutral-report pairs,
 `conn=5 disc=0`.
 
+Implementation note (P3.28, 2026-11-25): the Link-loss row's console
+evidence names its cause — the `SKYSTATE ble_dropped` line carries the
+HCI (Host Controller Interface, the radio-level event channel)
+disconnection reason code the radio itself reported (`reason=0xNN` plus a
+human-readable name, e.g. 0x06 key_missing = a stale pairing after a
+reflash orphaned the bond, 0x08 connection_timeout = the supervision
+watchdog, 0x13 remote_user_terminated = the host ended the link, 0x16
+local_host_terminated = this side ended it). The sketch's own BTstack HCI
+event handler decodes the Disconnection Complete event and stores the
+code (volatile, latest-wins, never reset — the twin of P3.24's
+unknown-frame snapshot); loop()'s disconnect drain prints it. If no such
+event was ever seen the line prints `reason=none` instead of a fake 0x00.
+Hardware session 5's post-reflash bounce was root-caused host-side before
+its reason code was ever captured; this note makes every future link loss
+self-naming from the device side.
+
 ## 7. Performance
 
 | Metric | Requirement | Verification |
