@@ -589,6 +589,47 @@ docker run -it --rm \
     P3.29; on hardware (next reflash): after any link loss, the dropped
     line itself says the cause — check it against btmon's own
     disconnection report and remember the re-pair-after-reflash caveat.
+    Update (2026-11-25, P3.29 commit `672e128`): the per-event evidence
+    line is live — the device-side instrument the acceptance session's
+    two unanswerable questions asked for, plus the sensor's own health
+    bits that neither driver had ever surfaced. What landed:
+    - **SKYTRACE** — one compact serial line per DISPATCHED sensor
+      event: `pos x= y= z=`, `touch code= zone= family=`,
+      `gest code= class= edge=`, `wheel deg=`; every line ends with the
+      per-frame context `aw_valid= aw_cnt= sys=0xNN noise= clip=` (the
+      AirWheel validity flag + raw free-running counter, and the RAW
+      SystemInfo byte with bit 4 EnvironmentalNoise and bit 5 Clipping
+      decoded — the sensor's own health report, now public driver state
+      `last_sysinfo`, set on EVERY frame before the validity branches so
+      it survives even when no payload field is valid). Compile-time
+      gated, OFF by default (the 200 Hz position path stays quiet);
+      enabled for an acceptance-run build with
+      `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh …` (flash.sh
+      forwards it as `-DSKYWRITER_EVENT_TRACE=1` through
+      `--build-property build.extra_flags=` — this arduino-cli 1.x has
+      no `--build-flags` flag), position lines rate-limited to one per
+      50 ms even when enabled. Verified on-target: the default Pico W
+      build contains zero SKYTRACE strings, the traced build contains
+      them (+536 bytes).
+    - **The always-on health line** gained `sysinfo=0xNN noise= clip=`
+      after `other_read=` — the latest sensor frame's SystemInfo byte
+      and its two health bits, ungated, so the hover-deafness evidence
+      (P4.0 hypothesis (g)) is visible in every build.
+    - specs/ble_hid.md §6 gained the P3.29 implementation note; 9 new
+      tests (6 sketch pins + the behavioural
+      tests/test_driver_sysinfo.py host test through the real poll())
+      verified failing first; 148 pytest tests; `run_tests.sh` green
+      4/4; all four sketches compile.
+    On hardware (next reflash): build with
+    `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh
+    pico-arduino/SkywriterController`, remember the re-pair-after-reflash
+    caveat, then rerun the acceptance exercises — the SKYTRACE touch
+    lines answer which ZONE every tap landed in, `aw_valid=`/`aw_cnt=`
+    answer whether a rotation attempt ever produced AirWheel-valid data,
+    and `noise=`/`clip=` on both the trace and the health line surface
+    the sensor's environment health during the hover experiments. New
+    open item P3.30 (the Raspberry Pi Python driver should surface the
+    same SystemInfo byte for the P4.0 hypothesis (iii) cross-check).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -714,28 +755,23 @@ round's `HW_REPORT.md`)
 ### 3h — Acceptance-run items (opened 2026-11-25 from the first P4.0
 acceptance session; evidence in P4.0's 2026-11-25 update)
 
-- [ ] P3.29 **A per-event evidence line for the acceptance run.** In
-      plain language: the health line's aggregate counters proved
-      which CHANNELS are alive, but the 2026-11-25 acceptance session
-      hit two questions they cannot answer — which ZONE a tap landed
-      in (every tap produced button clicks and none produced the Page
-      Up/Down keys, and the counters cannot say whether the sensor
-      never sent a north/south touch code or sent one that was
-      mishandled) and whether the rotation attempt ever produced
-      AirWheel-valid data. Add a compile-time-gated serial line that
-      prints each dispatched event compactly (kind + touch code/zone
-      + position values + the AirWheel-valid flag/counter + the raw
-      SystemInfo byte), off by default or rate-limited so the
-      200 Hz position path stays quiet, enabled for acceptance-run
-      builds; pin it source-level like the existing sketch pins.
-      The SystemInfo byte matters beyond validity gating: its
-      EnvironmentalNoise (bit 4) and Clipping (bit 5) bits are the
-      sensor's own health report, currently surfaced by NEITHER
-      driver — they may name the 2026-11-25 hover-deafness cause
-      directly (hypothesis (g) in P4.0). The line is the
-      device-side twin of the laptop-side evtest/hid-recorder capture
-      (P4.0's step 3): together they make every zone/technique
-      question decidable without guessing.
+- [x] P3.29 → done, moved to the Done section below (commit `672e128`).
+- [ ] P3.30 **Surface the SystemInfo byte in the Raspberry Pi Python
+      driver (`library/skywriter/__init__.py`).** In plain language: the
+      sensor attaches a one-byte status report (SystemInfo) to every
+      data frame it sends, and two of its bits are the sensor's own
+      health report — bit 4 EnvironmentalNoise ("environmental noise
+      has been detected") and bit 5 Clipping ("the ADCs are clipping").
+      P3.29 made the Arduino driver record it as public state
+      (`last_sysinfo`) and the firmware print it; the Python driver
+      still discards the byte. The P4.0 acceptance run's hypothesis
+      (iii) may need the Raspberry Pi cross-check with THIS repo's
+      Python driver (the sensor's native platform), and that session
+      should see the same evidence surface: record the raw byte per
+      decoded sensor-data frame as module state (the `rotation` /
+      `_lastrotation` module-global style) and expose it without new
+      hardware access — keep every test offline and mocked
+      (`library/test.py`, the P3.11c fixture pattern).
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -1199,6 +1235,89 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.29 — the per-event evidence trace is live, and the sensor's own
+  health bits are surfaced at last (commit `672e128`). In plain
+  language: the two-second status line's counters can say WHICH channels
+  fire, but the 2026-11-25 acceptance session hit two questions they
+  cannot answer — which ZONE of the board a tap landed on (every tap
+  made mouse clicks, none made the Page Up / Down keys, and the counters
+  cannot distinguish "the sensor never sent a north/south code" from
+  "it sent one and we mishandled it"), and whether a rotation attempt
+  ever produced valid rotation data at all (`events wheel=0` through
+  both attempts). This item landed the device-side instrument for both,
+  plus a piece of evidence the sensor has been attaching to every frame
+  all along that BOTH drivers threw away:
+  - **SKYTRACE lines** (the sketch, `pico-arduino/
+    SkywriterController.ino`): one compact serial line per DISPATCHED
+    sensor event, printed by gated helper functions called after the
+    mapper dispatch in each sensor callback (the 200 Hz hot path itself
+    never prints — the P3.22 rule stands, and the existing
+    no-Serial-in-callbacks pin is untouched). Formats:
+    `SKYTRACE pos x=… y=… z=…`, `SKYTRACE touch code=7 zone=north
+    family=tap …`, `SKYTRACE gest code=4 class=1 edge=0 …`,
+    `SKYTRACE wheel deg=+22.50 …`; every line ends with the per-frame
+    context `aw_valid= aw_cnt=0xNN sys=0xNN noise= clip=` — the
+    AirWheel validity flag + the raw free-running counter (Interface.pdf
+    Table 4-10: 32 counts = 1 revolution, wraps 255→0), and the RAW
+    SystemInfo byte with its two health bits decoded: noise = bit 4
+    EnvironmentalNoise, clip = bit 5 Clipping — the sensor's own report
+    about its environment, the candidate evidence for P4.0's
+    hover-deafness hypothesis (g).
+  - **Compile-time gate, off by default**: `#ifndef
+    SKYWRITER_EVENT_TRACE` defaults the macro to 0 (a `-D` can
+    override); every trace print lives inside a
+    `#if SKYWRITER_EVENT_TRACE` region, so a default build's binary
+    contains zero SKYTRACE strings (verified on-target). Even when
+    enabled, position lines are rate-limited to one per
+    TRACE_POSITION_INTERVAL_MS = 50 ms; touch/gesture/wheel events are
+    rare and print every one. Acceptance-run builds turn the trace on
+    with `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh …` — flash.sh
+    forwards it as `-DSKYWRITER_EVENT_TRACE=1` through
+    `--build-property build.extra_flags=…` (the repo's arduino-cli 1.x
+    has no `--build-flags` flag; the first flash.sh draft used it and
+    was corrected).
+  - **Driver public state** (`arduino/Skywriter/`): `last_sysinfo` —
+    the raw SystemInfo byte, set on EVERY decoded sensor-data frame
+    BEFORE the validity branches, so the health bits survive even when
+    no payload field is valid (the former code discarded the byte
+    outside the two validity checks); and the AirWheel state moved from
+    private to public under the names the evidence line prints —
+    `airwheel_valid` / `airwheel_counter` (renamed from
+    `airwheel_counter_valid` / `lastrotation`; the baseline/re-baseline
+    semantics are unchanged, all replay tests stay green).
+  - **The always-on health line** gained `sysinfo=0xNN noise= clip=`
+    after `other_read=` — ungated, because a once-per-2 s print cannot
+    flood anything and the hover-deafness evidence must be visible in
+    every build without a special flash.
+  - Specs: `specs/ble_hid.md` §6 gained the P3.29 implementation note
+    (the trace's fields, the gate, the enable path, the rate limit, the
+    health-line fields). No deviation row — nothing in the specs
+    contradicts this.
+  - Test-first discipline held: 6 new source pins in
+    tests/test_firmware_sketch.py (the 0-default gate with every
+    SKYTRACE inside the guarded region; the item's fields on every line
+    kind; the 50 ms rate limit as a named constant; the gated helper
+    calls following the mapper dispatch with no direct Serial prints in
+    the callbacks; the health line's sysinfo/noise/clip fields placed
+    between the snapshot and the events; the flash.sh acceptance knob
+    with the off default) and a new behavioural host test
+    (tests/test_driver_sysinfo.py + tests/cpp/host_sysinfo_main.cpp
+    driving the REAL driver through its genuine poll() with crafted
+    26-byte frames: the 0x30 noise+clipping byte survives a frame that
+    dispatches nothing, `last_sysinfo` tracks every decoded frame, the
+    AirWheel baseline stays silent with the flag/counter public, +22.50
+    degrees on a +2 counter step, the flag clears when validity drops)
+    — all 9 verified FAILING against the pre-change code first (the
+    health byte was discarded; the AirWheel state was private; the
+    trace did not exist), pass now. 148 pytest tests; `bash
+    run_tests.sh` green 4/4; all four sketches compile.
+  - On hardware (next reflash): build the acceptance variant with
+    `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh
+    pico-arduino/SkywriterController` and remember the standing
+    re-pair-after-reflash caveat; then the SKYTRACE touch lines answer
+    the zone question, `aw_valid=`/`aw_cnt=` answer the rotation
+    question, and `noise=`/`clip=` watch the sensor's environment
+    during the hover experiments (P4.0's steps).
 - P3.28 — the link-loss line names its own cause (this commit): the
   `SKYSTATE ble_dropped` serial line now carries the radio's own
   disconnection reason code plus a human-readable name —
