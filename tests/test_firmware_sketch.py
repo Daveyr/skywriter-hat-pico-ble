@@ -866,3 +866,176 @@ def test_the_200hz_sensor_path_never_prints():
                  "on_sensor_airwheel"):
         assert "Serial." not in function_body(name), (
             f"{name} must not print (200 Hz path)")
+
+
+# ------------------------------------- P3.29: the per-event evidence trace --
+# (The 2026-11-25 acceptance session hit two questions the aggregate health
+# counters cannot answer: which ZONE a tap landed in — every tap produced
+# button clicks and none produced the Page Up/Down keys, and the counters
+# cannot say whether the sensor never sent a north/south touch code or sent
+# one that was mishandled — and whether a rotation attempt ever produced
+# AirWheel-valid data at all (`events wheel=0` through both attempts). The
+# SKYTRACE lines answer both from the device side, one compact line per
+# dispatched event. The SystemInfo byte matters beyond validity gating: its
+# EnvironmentalNoise (bit 4) and Clipping (bit 5) bits are the sensor's own
+# health report, surfaced by NEITHER driver before P3.29, and they may name
+# the hover-deafness cause directly (P4.0 hypothesis (g)).)
+
+def _trace_guarded_text():
+    """The sketch text inside `#if SKYWRITER_EVENT_TRACE` ... `#endif`
+    regions (the gate is the only conditional-compilation block in the
+    sketch, so a simple #if/#endif stack resolves it)."""
+    lines = sketch_source().splitlines()
+    inside = []
+    stack = []
+    chunks = []
+    start = None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("#if"):
+            stack.append(s)
+            if "SKYWRITER_EVENT_TRACE" in s and start is None:
+                start = i
+        elif s.startswith("#endif"):
+            if stack:
+                top = stack.pop()
+                if "SKYWRITER_EVENT_TRACE" in top and start is not None:
+                    chunks.append("\n".join(lines[start:i + 1]))
+                    start = None
+    assert stack == [], "unbalanced #if/#endif in the sketch"
+    assert chunks, "no SKYWRITER_EVENT_TRACE-guarded region found"
+    return "\n".join(chunks)
+
+
+def test_event_trace_is_compile_time_gated_and_off_by_default():
+    """P3.29: the per-event trace is compile-time gated — a named
+    `SKYWRITER_EVENT_TRACE` macro defaults to 0 (the 200 Hz position path
+    must stay quiet in normal builds), every SKYTRACE print lives inside a
+    `#if SKYWRITER_EVENT_TRACE` region, and the default can be flipped for
+    an acceptance-run build without hunting through the code."""
+    src = sketch_source()
+    ifndef_at = src.index("#ifndef SKYWRITER_EVENT_TRACE")
+    define_at = src.index("#define SKYWRITER_EVENT_TRACE 0")
+    assert ifndef_at < define_at, (
+        "the gate macro must default to 0 (an #ifndef fallback the build "
+        "flags can override)")
+    guarded = _trace_guarded_text()
+    assert "SKYTRACE " in guarded, "the trace lines are missing"
+    # Every SKYTRACE occurrence sits inside a guarded region — nothing
+    # prints per-event in a default build.
+    for line in src.splitlines():
+        if "SKYTRACE" in line:
+            assert line.strip().startswith("//") or "SKYTRACE" in guarded, (
+                f"an ungated SKYTRACE print leaked out: {line!r}")
+
+
+def test_event_trace_lines_carry_the_item_fields():
+    """The trace prints each dispatched event compactly with the fields the
+    acceptance session named: kind + touch code/zone (+ family) on touch
+    lines, the position values on position lines, the gesture code on
+    gesture lines, the wheel degrees on wheel lines — and EVERY line ends
+    with the per-frame context the counters cannot show: the AirWheel-valid
+    flag/counter and the RAW SystemInfo byte with its two health bits
+    decoded (noise = bit 4, clip = bit 5)."""
+    guarded = _trace_guarded_text()
+    for token in ("SKYTRACE pos x=", "SKYTRACE touch code=",
+                  "SKYTRACE gest code=", "SKYTRACE wheel deg="):
+        assert token in guarded, f"missing trace line {token!r}"
+    # The per-event payloads.
+    for token in ("zone=", "family=", "y=", "z=", "class=", "edge="):
+        assert token in guarded, f"missing trace field {token!r}"
+    # The shared per-frame context: AirWheel validity + raw counter from the
+    # driver's public state, the raw SystemInfo byte, and the decoded health
+    # bits (bit 4 EnvironmentalNoise = 0x10, bit 5 Clipping = 0x20).
+    for token in ("aw_valid=", "aw_cnt=", "sys=", "noise=", "clip="):
+        assert token in guarded, f"missing trace context {token!r}"
+    assert "Skywriter.airwheel_valid" in guarded
+    assert "Skywriter.airwheel_counter" in guarded
+    assert "Skywriter.last_sysinfo" in guarded
+    assert "0x10" in guarded and "0x20" in guarded, (
+        "the noise (bit 4) and clipping (bit 5) bits must be decoded from "
+        "the SystemInfo byte's own bit masks")
+
+
+def test_event_trace_position_is_rate_limited():
+    """Even when enabled, the 200 Hz position path stays readable: position
+    lines are rate-limited through a named interval constant (the touch,
+    gesture and wheel events are rare and print every one)."""
+    guarded = _trace_guarded_text()
+    assert "TRACE_POSITION_INTERVAL_MS" in guarded, (
+        "the position rate limit must be a named constant")
+    body = function_body("trace_position")
+    assert "TRACE_POSITION_INTERVAL_MS" in body
+    assert "trace_last_position_ms" in body, (
+        "the rate limit must compare against a last-printed timestamp")
+
+
+def test_sensor_callbacks_call_the_gated_trace_helpers():
+    """Every dispatched sensor event gets its trace call — after the
+    unconnected drop gate and after the mapper dispatch (the item says
+    "each dispatched event"), and the callbacks themselves stay free of
+    Serial prints (the 200 Hz path never prints directly; the gated
+    helpers are the only serial output it can reach)."""
+    pairs = (("on_sensor_xyz", "trace_position("),
+             ("on_sensor_touch", "trace_touch("),
+             ("on_sensor_gesture", "trace_gesture("),
+             ("on_sensor_airwheel", "trace_airwheel("))
+    for name, call in pairs:
+        body = function_body(name)
+        assert call in body, f"{name} must call {call}"
+        assert "Serial." not in body, (
+            f"{name} must not print directly — the trace helper is the "
+            "only serial output the 200 Hz path reaches")
+        # The dispatch happens before the trace: the line shows an event
+        # that actually reached the engine.
+        assert body.index("mapper.on") < body.index(call), (
+            f"{name}'s trace call must follow the mapper dispatch")
+    for helper in ("trace_position", "trace_touch", "trace_gesture",
+                   "trace_airwheel"):
+        assert "Serial.print" in function_body(helper), (
+            f"trace helper {helper} must print")
+
+
+def test_health_line_carries_the_sysinfo_health_bits():
+    """The sensor's own health report is visible in EVERY build (not gated
+    like SKYTRACE): the always-on health line carries the latest
+    sensor-data frame's RAW SystemInfo byte (`sysinfo=0xNN`) plus its two
+    health bits decoded — `noise=` (bit 4, EnvironmentalNoise) and `clip=`
+    (bit 5, Clipping) — right after the other-frame snapshot it explains
+    and before the event counters."""
+    body = function_body("print_health_status")
+    assert "sysinfo=0x" in body, (
+        "the health line must print the raw SystemInfo byte")
+    assert "Skywriter.last_sysinfo" in body, (
+        "the byte comes from the driver's public state")
+    assert "noise=" in body and "clip=" in body, (
+        "the two health bits must be decoded, not left as bit arithmetic")
+    assert "0x10" in body and "0x20" in body, (
+        "the decode uses the byte's own bit masks (bit 4, bit 5)")
+    assert "SKYTRACE" not in body, (
+        "the health line is always on — no trace-gate dependency")
+    other_read_at = body.index("other_read=")
+    sysinfo_at = body.index("sysinfo=0x")
+    events_at = body.index('" events pos="')
+    assert other_read_at < sysinfo_at < events_at, (
+        "the sysinfo fields sit between the snapshot and the events")
+
+
+def test_flash_script_can_enable_the_trace_for_acceptance_builds():
+    """The acceptance-run build path: `SKYWRITER_EVENT_TRACE=1 ./flash.sh …`
+    must forward the switch to the compiler as a `-D` definition (so an
+    acceptance build never requires editing the sketch source), and the
+    default build must pass no such flag. (`--build-property
+    build.extra_flags=-D…` is the arduino-cli 1.x mechanism — this CLI
+    version has no --build-flags flag.)"""
+    flash = (SKETCH.parents[1] / "flash.sh").read_text()
+    assert "SKYWRITER_EVENT_TRACE" in flash, (
+        "flash.sh must accept the SKYWRITER_EVENT_TRACE=1 build knob")
+    assert 'build.extra_flags=-DSKYWRITER_EVENT_TRACE=1' in flash, (
+        "the switch must reach the compiler as a -D definition")
+    # The default stays off: the knob reads with a `:-0` fallback and the
+    # build-property variable defaults to empty (no -D reaches the
+    # compiler in a normal build).
+    assert "${SKYWRITER_EVENT_TRACE:-0}" in flash
+    assert 'BUILD_PROPERTY=""' in flash, (
+        "the default build must pass no -D flag")

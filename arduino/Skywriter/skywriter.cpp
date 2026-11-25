@@ -299,9 +299,16 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
   NoisePower
   CICData
   SDData
-*/  
-      
-      if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_XYZ && data[SW_PAYLOAD_HDR_SYSINFO] & SW_SYS_POSITION ){
+*/
+
+      // P3.29: the raw SystemInfo byte is recorded on EVERY sensor-data
+      // frame, before the validity branches — its health bits (bit 4
+      // EnvironmentalNoise, bit 5 Clipping) are the sensor's own report
+      // about its environment and must surface even when no payload field
+      // is valid (the former code discarded the byte outside the two
+      // validity checks).
+      this->last_sysinfo = data[SW_PAYLOAD_HDR_SYSINFO];
+if( data[SW_PAYLOAD_HDR_CONFIGMASK] & SW_DATA_XYZ && data[SW_PAYLOAD_HDR_SYSINFO] & SW_SYS_POSITION ){
         // Valid XYZ position
         this->x = data[SW_PAYLOAD_X+1] << 8 | data[SW_PAYLOAD_X];
         this->y = data[SW_PAYLOAD_Y+1] << 8 | data[SW_PAYLOAD_Y];
@@ -381,13 +388,13 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
         //    d = ((cur - last + 128) % 256) - 128, so a 255->0 wrap counts
         //    as +1 step, not -254.
 
-        if( !this->airwheel_counter_valid ){
+        if( !this->airwheel_valid ){
           // Silent baseline: record the reference only, emit nothing.
-          this->airwheel_counter_valid = true;
-          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+          this->airwheel_valid = true;
+          this->airwheel_counter = data[SW_PAYLOAD_AIRWHEEL];
         }
         else{
-          int delta = (( data[SW_PAYLOAD_AIRWHEEL] - this->lastrotation + 128) % 256 + 256) % 256 - 128;
+          int delta = (( data[SW_PAYLOAD_AIRWHEEL] - this->airwheel_counter + 128) % 256 + 256) % 256 - 128;
           
           // Delta is in degrees, quantized to 11.25 degrees per sensor step
           // (32 counts = full 360 degree rotation)
@@ -403,13 +410,13 @@ void _SkyWriter::handle_sensor_data(unsigned char* data){
             if( this->rotation > 1000.0f ) this->rotation = 1000.0f;
           }
           
-          this->lastrotation = data[SW_PAYLOAD_AIRWHEEL];
+          this->airwheel_counter = data[SW_PAYLOAD_AIRWHEEL];
         }
       }
       else{
         // This frame carries no valid AirWheel data: the counter may have
         // free-run meanwhile, so re-baseline on the next valid frame
         // (same rule as the Python driver's `_lastrotation = None`).
-        this->airwheel_counter_valid = false;
+        this->airwheel_valid = false;
       }
 }

@@ -46,6 +46,17 @@
     code (e.g. 0x06 = a stale pairing after a reflash, 0x08 = the
     connection watchdog gave up, 0x13 = the host ended the link) — the
     evidence session 5's bounce investigation had to fix host-side without.
+    And since fix item P3.29 the health line also carries the sensor's own
+    health report (`sysinfo=0xNN noise= clip=` — the SystemInfo byte of
+    the latest sensor frame, whose bit 4 EnvironmentalNoise and bit 5
+    Clipping may name the hover-deafness cause directly), and an optional
+    compile-time-gated per-event evidence trace (`SKYTRACE` lines: one
+    compact line per dispatched sensor event with its kind, touch
+    code/zone/family, position values, gesture code/class/edge, wheel
+    degrees, the AirWheel validity flag + raw counter and the raw
+    SystemInfo byte) — off by default so the 200 Hz position path stays
+    quiet; enable it for acceptance-run builds with
+    SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh pico-arduino/SkywriterController.
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -415,6 +426,21 @@ static void print_health_status(unsigned long now_ms) {
   }
   Serial.print(" other_read=");
   Serial.print(Skywriter.other_snapshot_read);
+  // P3.29: the sensor's own health report — the RAW SystemInfo byte of
+  // the last decoded sensor-data frame plus its two health bits decoded.
+  // Always on (unlike the gated SKYTRACE lines): a once-per-2 s print
+  // cannot flood anything, and these bits may name the hover-deafness
+  // cause directly (P4.0 hypothesis (g)) — noise=1 (bit 4,
+  // EnvironmentalNoise) means the sensor detected environmental noise;
+  // clip=1 (bit 5, Clipping) means its ADCs are clipping. 0x00 with
+  // frames sensor=0 means no sensor frame has been decoded yet.
+  Serial.print(" sysinfo=0x");
+  if (Skywriter.last_sysinfo < 0x10) Serial.print('0');
+  Serial.print(Skywriter.last_sysinfo, HEX);
+  Serial.print(" noise=");
+  Serial.print((Skywriter.last_sysinfo & 0x10) ? 1 : 0);
+  Serial.print(" clip=");
+  Serial.print((Skywriter.last_sysinfo & 0x20) ? 1 : 0);
   Serial.print(" events pos=");
   Serial.print(ev_position);
   Serial.print(" touch=");
@@ -675,6 +701,145 @@ static TouchKind kind_for_touch_code(unsigned char code) {
 }
 
 // ---------------------------------------------------------------------------
+// P3.29: the per-event evidence trace — compile-time gated, OFF by default
+//
+// The health line's aggregate counters proved which CHANNELS are alive,
+// but the 2026-11-25 acceptance session hit two questions they cannot
+// answer: which ZONE a tap landed in (every tap produced button clicks and
+// none produced the Page Up / Down keys — the counters cannot say whether
+// the sensor never sent a north/south touch code or sent one that was
+// mishandled), and whether a rotation attempt ever produced AirWheel-valid
+// data at all (`events wheel=0` through both attempts). This trace prints
+// one compact serial line per DISPATCHED sensor event:
+//
+//   SKYTRACE pos x=.. y=.. z=..          a valid position event
+//   SKYTRACE touch code=7 zone=north family=tap ...
+//   SKYTRACE gest code=4 class=1 edge=0 ...
+//   SKYTRACE wheel deg=+22.50 ...        a rotation delta
+//
+// Every line ends with the per-frame context the counters cannot show:
+//   aw_valid= / aw_cnt= — the driver's AirWheel validity flag and the raw
+//     free-running rotation counter of the last AirWheel-valid frame
+//     (Interface.pdf Table 4-10: 32 counts = 1 revolution, wraps 255->0);
+//   sys= — the RAW SystemInfo byte (sensor-data payload byte 3) of the
+//     frame the event came from, plus its two health bits DECODED:
+//     noise= (bit 4, EnvironmentalNoise — the sensor detected
+//     environmental noise) and clip= (bit 5, Clipping — the sensor's ADCs
+//     are clipping). Neither driver surfaced these bits before P3.29;
+//     they may name the hover-deafness cause directly (P4.0 hypothesis
+//     (g)), and the always-on health line prints them too.
+//
+// OFF by default: at full rate the 200 Hz position path would flood the
+// USB CDC (Communications Device Class — the USB serial port) console.
+// Enable it for an acceptance-run build with
+//   SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh pico-arduino/SkywriterController
+// (flash.sh forwards the value as a -D compiler flag), or by flipping the
+// default below to 1. Even when enabled, position lines are RATE-LIMITED
+// to one per TRACE_POSITION_INTERVAL_MS (a readable sample of the hover
+// path); touch/gesture/wheel events are rare and print every one.
+// ---------------------------------------------------------------------------
+
+#ifndef SKYWRITER_EVENT_TRACE
+#define SKYWRITER_EVENT_TRACE 0
+#endif
+
+#if SKYWRITER_EVENT_TRACE
+
+// One position trace line per this interval (≈ 20 lines/s) — the enabled
+// trace stays readable while still sampling the hover path.
+static const unsigned long TRACE_POSITION_INTERVAL_MS = 50;
+static unsigned long trace_last_position_ms = 0;
+
+// Names for the trace line: the driver's touch code (0..14) maps onto the
+// engine's zone and family (zone_for_touch_code / kind_for_touch_code
+// above); the names are what the acceptance run greps for.
+static const char* trace_zone_name(SensorZone zone) {
+  switch (zone) {
+    case ZONE_NORTH: return "north";
+    case ZONE_SOUTH: return "south";
+    case ZONE_EAST:  return "east";
+    case ZONE_WEST:  return "west";
+    default:         return "center";
+  }
+}
+
+static const char* trace_family_name(TouchKind kind) {
+  switch (kind) {
+    case TOUCH_TAP:       return "tap";
+    case TOUCH_DOUBLETAP: return "doubletap";
+    default:              return "hold";
+  }
+}
+
+// The shared per-frame context every trace line ends with: the AirWheel
+// validity flag + raw counter and the RAW SystemInfo byte with its two
+// health bits decoded (see the section comment above).
+static void trace_context() {
+  Serial.print(" aw_valid=");
+  Serial.print(Skywriter.airwheel_valid ? 1 : 0);
+  Serial.print(" aw_cnt=0x");
+  if (Skywriter.airwheel_counter < 0x10) Serial.print('0');
+  Serial.print(Skywriter.airwheel_counter, HEX);
+  Serial.print(" sys=0x");
+  if (Skywriter.last_sysinfo < 0x10) Serial.print('0');
+  Serial.print(Skywriter.last_sysinfo, HEX);
+  // The sensor's own health bits (Interface.pdf Table 4-10): bit 4 =
+  // EnvironmentalNoise, bit 5 = Clipping.
+  Serial.print(" noise=");
+  Serial.print((Skywriter.last_sysinfo & 0x10) ? 1 : 0);
+  Serial.print(" clip=");
+  Serial.print((Skywriter.last_sysinfo & 0x20) ? 1 : 0);
+}
+
+static void trace_position(unsigned int x, unsigned int y, unsigned int z) {
+  unsigned long now = millis();
+  if ((long)(now - trace_last_position_ms) < TRACE_POSITION_INTERVAL_MS) {
+    return;  // rate-limited: a readable sample, not a 200 Hz flood
+  }
+  trace_last_position_ms = now;
+  Serial.print("SKYTRACE pos x=");
+  Serial.print(x);
+  Serial.print(" y=");
+  Serial.print(y);
+  Serial.print(" z=");
+  Serial.print(z);
+  trace_context();
+  Serial.println();
+}
+
+static void trace_touch(unsigned char code) {
+  Serial.print("SKYTRACE touch code=");
+  Serial.print(code);
+  Serial.print(" zone=");
+  Serial.print(trace_zone_name(zone_for_touch_code(code)));
+  Serial.print(" family=");
+  Serial.print(trace_family_name(kind_for_touch_code(code)));
+  trace_context();
+  Serial.println();
+}
+
+static void trace_gesture(unsigned char code) {
+  Serial.print("SKYTRACE gest code=");
+  Serial.print(code);
+  Serial.print(" class=");
+  Serial.print(Skywriter.last_gesture_class);
+  Serial.print(" edge=");
+  Serial.print(Skywriter.last_gesture_edge ? 1 : 0);
+  trace_context();
+  Serial.println();
+}
+
+static void trace_airwheel(float degrees) {
+  Serial.print("SKYTRACE wheel deg=");
+  Serial.print(degrees, 2);
+  trace_context();
+  Serial.println();
+}
+
+#endif  // SKYWRITER_EVENT_TRACE
+
+
+// ---------------------------------------------------------------------------
 // Connection life cycle state (specs/ble_hid.md §6, P3.17)
 //
 // The Bluetooth callbacks fire from inside the Bluetooth stack's own
@@ -739,6 +904,9 @@ static void on_sensor_xyz(unsigned int x, unsigned int y, unsigned int z) {
   }
   ev_position++;
   mapper.onPosition((uint16_t)x, (uint16_t)y, (uint16_t)z, millis());
+#if SKYWRITER_EVENT_TRACE
+  trace_position(x, y, z);
+#endif
 }
 
 static void on_sensor_touch(unsigned char code) {
@@ -750,6 +918,9 @@ static void on_sensor_touch(unsigned char code) {
   ev_touch++;
   mapper.onTouch(zone_for_touch_code(code), kind_for_touch_code(code),
                  millis());
+#if SKYWRITER_EVENT_TRACE
+  trace_touch(code);
+#endif
 }
 
 static void on_sensor_gesture(unsigned char gesture) {
@@ -760,6 +931,9 @@ static void on_sensor_gesture(unsigned char gesture) {
   }
   ev_gesture++;
   mapper.onGesture(gesture, millis());
+#if SKYWRITER_EVENT_TRACE
+  trace_gesture(gesture);
+#endif
 }
 
 static void on_sensor_airwheel(float degrees) {
@@ -770,6 +944,9 @@ static void on_sensor_airwheel(float degrees) {
   }
   ev_airwheel++;
   mapper.onAirwheel(degrees, millis());
+#if SKYWRITER_EVENT_TRACE
+  trace_airwheel(degrees);
+#endif
 }
 
 // System_Status acknowledges that arrive during normal operation (after

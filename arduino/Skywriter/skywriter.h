@@ -112,6 +112,28 @@ class _SkyWriter
     unsigned char last_gesture_class;  // bits 12-15: 0 garbage, 1 flick, 2 circle
     bool last_gesture_edge;            // bit 16: edge-flick flag
     unsigned int  x, y, z;
+    // P3.29: the RAW SystemInfo byte (Interface.pdf §4.5 Table 4-10) of
+    // the last decoded sensor-data frame — public state like `last_gesture`,
+    // so the firmware's health line and per-event evidence trace can print
+    // it. Set on EVERY frame, BEFORE the validity branches: the byte
+    // carries the sensor's own health report (bit 4 EnvironmentalNoise =
+    // environmental noise detected, bit 5 Clipping = the ADCs are
+    // clipping — the bits P4.0's hover-deafness hypothesis (g) needs),
+    // which must surface even when no payload field is valid.
+    unsigned char last_sysinfo = 0;
+    // P3.29: the AirWheel validity flag and the raw counter, public like
+    // `last_sysinfo` so the firmware's evidence line can print "was
+    // AirWheel valid at this event, and what did the counter say".
+    // `airwheel_valid` stands in for the Python driver's
+    // `_lastrotation = None` sentinel — false until a frame with valid
+    // AirWheel data establishes the baseline, and cleared again by any
+    // frame without valid AirWheel data (see handle_sensor_data). The
+    // counter is the free-running 8-bit rotation counter of the last
+    // AirWheel-valid frame (Interface.pdf Table 4-10: 32 counts = 1
+    // revolution, wraps 255->0). Renamed from the former private
+    // `airwheel_counter_valid` / `lastrotation` in this item.
+    bool airwheel_valid = false;
+    unsigned char airwheel_counter = 0;
     // Health counters (fix item P3.22, hardware gate P4.0a T5): public
     // state like `last_gesture`, so any sketch (and the serial probe) can
     // read them without touching the driver's API. They only ever
@@ -171,12 +193,6 @@ class _SkyWriter
     void (*handle_xyz)(unsigned int, unsigned int, unsigned int);
     void (*handle_system_status)(unsigned char, unsigned int) = NULL;
     void (*handle_firmware_version)(unsigned char, const char*) = NULL;
-    // AirWheel counter reference: `airwheel_counter_valid` stands in for the
-    // Python driver's `_lastrotation = None` sentinel — false until a frame
-    // with valid AirWheel data establishes the baseline, and cleared again by
-    // any frame without valid AirWheel data (see handles_sensor_data).
-    unsigned char lastrotation = 0;
-    bool airwheel_counter_valid = false;
     unsigned char xfer, rst, addr;
     // Frame receiving buffer: sized for the longest sensor message,
     // Fw_Version_Info (0x83, 132 bytes = 4 header + 128 payload), so a

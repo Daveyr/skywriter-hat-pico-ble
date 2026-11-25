@@ -166,6 +166,25 @@ Hardware session 5's post-reflash bounce was root-caused host-side before
 its reason code was ever captured; this note makes every future link loss
 self-naming from the device side.
 
+Implementation note (P3.29, 2026-11-25): the console evidence gained a
+per-event trace and the sensor's own health bits. The `SKYTRACE` lines
+(one compact line per dispatched sensor event — kind, touch code /
+zone / family, position values, gesture code / class / edge, wheel
+degrees, plus the AirWheel validity flag + raw free-running counter and
+the RAW SystemInfo byte of the frame the event came from, with its two
+health bits decoded: `noise=` = bit 4 EnvironmentalNoise, `clip=` = bit 5
+Clipping, neither driver surfacing these before P3.29) are
+compile-time gated, OFF by default because the 200 Hz position path
+would flood the serial port at full rate. Enable them for an
+acceptance-run build with `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh …`
+(flash.sh forwards the switch as a `-D` compiler definition via
+`--build-property build.extra_flags=`), and position lines are
+rate-limited to one per 50 ms even when enabled (touch / gesture / wheel
+events are rare and print every one). The always-on health line now also
+carries `sysinfo=0xNN noise= clip=` — the latest sensor-data frame's
+SystemInfo byte and its two health bits — so the sensor's own health
+report is visible in every build (P4.0's hover-deafness hypothesis (g)).
+
 ## 7. Performance
 
 | Metric | Requirement | Verification |
