@@ -35,6 +35,12 @@ every failed attempt prints its own evidence line, the radio starts
 regardless of the sensor's state, and the health line carries the
 configuration outcome.
 
+The P3.27 pins carry the per-link connect-drain latch: the stack's opened
+callback fires once per notification-enable write (four to five per
+connection), so the battery/resync drain is armed only on the link's
+FIRST opened event (latched, cleared on the closed event) — one link
+drains exactly once and `ble conn=` counts links.
+
 Radio/GATT/RF truth is the Phase-4 hardware probes; these source-level pins
 only make a software regression (e.g. a reintroduced second `begin()`) fail
 `bash run_tests.sh` immediately.
@@ -469,6 +475,70 @@ def test_sensor_callbacks_registered_before_the_radio_starts():
     assert setup_src.index("PicoBluetoothBLEHID.setOpenedCB") < \
         setup_src.index("KeyboardBLE.begin("), (
         "link callbacks must be registered before the radio starts")
+
+
+# ------------------------------------- P3.27: one drain per link -----------
+# (Hardware session 5's btmon capture: the Bluetooth stack's opened callback
+# fires once per notification-enable write — the host writes one enable
+# switch per report channel, four to five per connection — so the unlatched
+# connect drain ran four to five times per SINGLE link: four battery
+# notifications, four neutral-report pairs, and a health line that counted
+# conn=5 with disc=0. specs/ble_hid.md §6 pins the neutral report "once"
+# per (re)connect — the latch is the code catching up with the spec.)
+
+def test_connect_drain_is_latched_per_link():
+    """P3.27: the opened callback arms the connect drain only on the
+    link's FIRST subscription write (a per-link latch consulted, then
+    set, before the arming flag), and the closed callback clears the
+    latch so the NEXT link drains again."""
+    opened = function_body("on_ble_opened")
+    assert "ble_connect_drain_latched" in opened, (
+        "the opened callback must consult the per-link drain latch — "
+        "unlatched, one link drains once per subscription write")
+    guard_at = opened.index("if (ble_connect_drain_latched)")
+    set_at = opened.index("ble_connect_drain_latched = true")
+    arm_at = opened.index("ble_connect_event = true")
+    assert guard_at < set_at < arm_at, (
+        "the latch must gate the arming: guard, set, then arm")
+    closed = function_body("on_ble_closed")
+    assert "ble_connect_drain_latched = false" in closed, (
+        "the closed callback must clear the latch — the next link gets "
+        "its own drain")
+
+
+def test_connect_drain_latch_set_and_cleared_exactly_once_each():
+    """The latch has exactly one set site (on_ble_opened) and one clear
+    site (on_ble_closed); loop() never touches it — a loop-side clear
+    would reopen the per-subscription-write storm between two drains."""
+    code = sketch_code()
+    assert code.count("ble_connect_drain_latched = true") == 1
+    # Exactly one clear site — the declaration's `= false` initializer is
+    # excluded from the count (lookbehind on its `bool `).
+    clears = re.findall(r"(?<!bool )ble_connect_drain_latched = false", code)
+    assert len(clears) == 1
+    assert "ble_connect_drain_latched = true" in \
+        function_body("on_ble_opened")
+    assert "ble_connect_drain_latched = false" in \
+        function_body("on_ble_closed")
+    assert "ble_connect_drain_latched" not in function_body("loop"), (
+        "the latch lives on the callback side; loop() drains the armed "
+        "flag only")
+
+
+def test_connect_drain_latch_is_documented_with_its_evidence():
+    """The latch declaration must be volatile (the stack's callback
+    context writes it) and its comment must carry the WHY (the opened
+    callback fires once per subscription write, not once per link) and
+    the hardware evidence it explains."""
+    src = sketch_source()
+    assert "volatile bool ble_connect_drain_latched" in src, (
+        "the latch is written from the stack's callback context")
+    decl_at = src.index("ble_connect_drain_latched")
+    comment = src[:decl_at]
+    for token in ("P3.27", "subscription", "once per link", "btmon"):
+        assert token in comment, (
+            f"the latch comment must name {token!r} — the WHY and the "
+            "session-5 evidence belong next to the mechanism")
 
 
 # ------------------------------------- P3.18: §7 performance (AC-BLE-04) ---

@@ -36,6 +36,12 @@
     attempt, and the health line carries the outcome (`sensor_cfg=`,
     `cfg_attempts=`) — a sensor hiccup at boot used to leave the device
     invisible to every host (hardware session 5's cold-boot captures).
+    And since fix item P3.27 the Bluetooth connect drain (battery refresh
+    + neutral resync report) runs once per LINK: the stack reports one
+    connection as several "opened" events (one per report-channel
+    subscription write), a per-link latch keeps the drain to a single run,
+    and the health line's `ble conn=` counts links, not subscription
+    writes.
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -677,7 +683,8 @@ static TouchKind kind_for_touch_code(unsigned char code) {
 // packet handler); all HID-visible life-cycle work runs in loop().
 // ---------------------------------------------------------------------------
 
-// Set by on_ble_opened (fires when the host enables HID input reports),
+// Set by on_ble_opened (fires when the host enables HID input reports —
+// once per link since P3.27's latch, see the latch comment below),
 // drained once in loop(): battery refresh + neutral resync report.
 static volatile bool ble_connect_event = false;
 // Set by on_ble_closed (fires on link loss), drained once in loop():
@@ -688,6 +695,20 @@ static volatile bool ble_disconnect_event = false;
 // "sensor events are now being dropped" — set at boot and on link loss,
 // cleared at connect, printed by the first suppressed event frame.
 static volatile bool ble_drop_notice_needed = true;
+
+// P3.27: the connect drain is LATCHED PER LINK. The Bluetooth stack fires
+// the opened callback once per notification-enable write — the host writes
+// one enable switch per report channel (four to five per connection,
+// hardware session 5's btmon capture) — not once per link. Without the
+// latch, one link drained four to five times: four battery notifications,
+// four neutral-report pairs, and a health line counting `ble conn=5` with
+// `disc=0` for a SINGLE link. The drain is a once-per-link action
+// (specs/ble_hid.md §6 "once", §8), so this latch gates the arming: set on
+// the FIRST opened event of a link, cleared on the closed event, so the
+// health line's `ble conn=` counts real links. It is cleared only in the
+// closed callback — the closed event precedes any later link by
+// definition, so a next connection can always arm its own drain.
+static volatile bool ble_connect_drain_latched = false;
 
 // §6 "Connected": the host consumes reports only while the link exists.
 // The same read also backs "Unconnected: sensor events are dropped, not
@@ -772,6 +793,10 @@ static void on_sensor_firmware_version(unsigned char fw_valid,
 static void on_ble_opened(uint8_t type, uint16_t channel, uint8_t* packet,
                           uint16_t size) {
   (void)type; (void)channel; (void)packet; (void)size;
+  // P3.27: only the link's FIRST subscription write arms the drain — the
+  // remaining enable writes belong to the same link (latch comment above).
+  if (ble_connect_drain_latched) return;
+  ble_connect_drain_latched = true;
   ble_connect_event = true;
 }
 
@@ -784,6 +809,9 @@ static void on_ble_closed(uint8_t type, uint16_t channel, uint8_t* packet,
   // report call allowed in this context — the flag below schedules the
   // state teardown in loop().
   gap_advertisements_enable(1);
+  // P3.27: the link is gone — its drain latch resets, so the NEXT link
+  // arms and drains exactly once (latch comment above).
+  ble_connect_drain_latched = false;
   ble_drop_notice_needed = true;
   ble_disconnect_event = true;
 }

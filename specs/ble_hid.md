@@ -138,6 +138,18 @@ a waiting command is parked on.
 | Link loss | Return to advertising within 5 s (`AC-BLE-05`). Report state to the serial console (`hw/serial_probe.py` asserts on these lines). |
 | Unconnected | Sensor events are **dropped**, not queued — HID describes current state, and stale reports replayed on reconnect would be wrong. On (re)connect, send the neutral report (no buttons, zero deltas) once to resync host state (`AC-BLE-07`). |
 
+Implementation note (P3.27, 2026-11-25): the Bluetooth stack fires the
+wrapper's "opened" callback once per notification-enable write — the host
+writes one enable switch per report channel, four to five per connection —
+not once per link. The connect drain of the rows above (the battery
+refresh, the neutral resync report — "once" per (re)connect, §8) is
+therefore **latched per link** in the firmware: the latch is set on the
+first opened event of a link and cleared on the closed event, so one link
+drains exactly once and the health line's `ble conn=` counts real links.
+Hardware session 5's btmon capture recorded the unlatched shape this note
+forbids: one link, four battery notifications, four neutral-report pairs,
+`conn=5 disc=0`.
+
 ## 7. Performance
 
 | Metric | Requirement | Verification |
