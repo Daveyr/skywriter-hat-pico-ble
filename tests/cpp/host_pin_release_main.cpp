@@ -75,8 +75,13 @@ int main() {
       g_digital_read_value = 1;
     } else if (strcmp(token, "DUMP") == 0) {
       for (const PinAction& a : g_pin_actions) {
-        printf("%s %u %d\n", a.kind == 0 ? "MODE" : "WRITE",
-               static_cast<unsigned>(a.pin), a.value);
+        if (a.kind == 0) {
+          printf("MODE %u %d\n", static_cast<unsigned>(a.pin), a.value);
+        } else if (a.kind == 1) {
+          printf("WRITE %u %d\n", static_cast<unsigned>(a.pin), a.value);
+        } else {
+          printf("DELAY %d\n", a.value);
+        }
       }
       fflush(stdout);
     } else {

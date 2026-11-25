@@ -117,6 +117,23 @@ Device identity:
 | State | Behaviour |
 |---|---|
 | Boot | Initialize sensor stack first, then BLE; start advertising. |
+
+Implementation note (P3.26, 2026-11-25): "initialize the sensor stack
+first" is a bounded step, never a gate — the sensor configuration sends
+its commands once in `setup()` and, if an acknowledgment is missed,
+retries the WHOLE sequence from `loop()` forever while the radio and the
+Bluetooth life cycle run regardless. The old permanent boot deny (the
+radio never starting until the sensor acknowledged every command) made
+the whole device invisible on the cold boots of hardware session 5
+(findings F12/F13, recorded in `fix_plan.md`) and is forbidden by this
+note. Every
+failed attempt prints its own serial evidence line
+(`SKYSTATE sensor_config_retry attempt= cmd_index= elapsed_ms=`), the
+success line names the attempts and duration (`SKYSTATE sensor_ok
+attempts= took_ms=`), and the health line carries the outcome
+(`sensor_cfg=`, `cfg_attempts=`). Sensor polling starts only once the
+configuration completes, so a poll cannot steal an acknowledgment frame
+a waiting command is parked on.
 | Connected | Send Input Reports only while the host has enabled them. |
 | Link loss | Return to advertising within 5 s (`AC-BLE-05`). Report state to the serial console (`hw/serial_probe.py` asserts on these lines). |
 | Unconnected | Sensor events are **dropped**, not queued — HID describes current state, and stale reports replayed on reconnect would be wrong. On (re)connect, send the neutral report (no buttons, zero deltas) once to resync host state (`AC-BLE-07`). |

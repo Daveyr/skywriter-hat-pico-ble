@@ -27,7 +27,14 @@ void digitalWrite(uint8_t pin, uint8_t val) {
 int digitalRead(uint8_t) {
   return g_digital_read_value;
 }
-void delay(unsigned long) {}
+
+// Fix item P3.26: delay() calls are RECORDED too (kind 2, pin unused) so
+// the real driver's begin() reset timing is assertable from a host test
+// (tests/test_driver_reset_timing.py) — the reference timing is
+// reset LOW → hold 100 ms → release → settle 500 ms.
+void delay(unsigned long ms) {
+  g_pin_actions.push_back({2, 0, static_cast<int>(ms)});
+}
 
 void WireClass::begin() {
   len_ = cursor_ = served_ = 0;

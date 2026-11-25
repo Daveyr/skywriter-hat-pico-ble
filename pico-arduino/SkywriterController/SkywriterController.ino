@@ -30,7 +30,12 @@
     exactly the classic 26-byte sensor frame first and only fetches more
     when the frame's own Size field says the message is longer (never the
     old single 132-byte over-read that desynchronised the sensor's
-    message framing).
+    message framing). Since fix item P3.26 a failed sensor configuration
+    can never deny boot: the radio always starts, the configuration
+    retries from loop() forever with one evidence line per failed
+    attempt, and the health line carries the outcome (`sensor_cfg=`,
+    `cfg_attempts=`) — a sensor hiccup at boot used to leave the device
+    invisible to every host (hardware session 5's cold-boot captures).
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -123,7 +128,23 @@ static const unsigned char SKYWRITER_PIN_RESET = 10; // sensor reset
 //     15-element array (that was the removed deviation D2),
 //   * every command is acknowledged with a System_Status frame (0x15), which
 //     the firmware waits for before sending the next one (the Python driver
-//     raises on a missing/failed ack — the firmware denies boot afterwards).
+//     raises on a missing/failed ack).
+//
+// P3.26 — a failed acknowledgment is EVIDENCE and a RETRY, never a boot
+// denial. The original design denied boot here (a forever
+// `sensor_config_failed` loop before the radio started), and hardware
+// session 5's cold-boot captures (F12) showed what that does: the sensor
+// missed one acknowledgment, and the whole device stayed invisible —
+// no radio, no advertisement, nothing for a host to see. Since the supply
+// fix (F16) the acknowledgments are reliable, but the design lesson stands:
+// a sensor hiccup must never silence the device. The rules now are:
+//   * setup() runs ONE whole-sequence attempt (bounded — the healthy path
+//     keeps the familiar boot order, `sensor_ok` before `hid_started`);
+//   * loop()'s retry tick reruns the WHOLE sequence forever until it
+//     completes, each failed attempt printing its own evidence line
+//     (attempt number, failing command, elapsed time);
+//   * the radio starts regardless of the sensor's state, and the health
+//     line carries the configuration outcome (`sensor_cfg=`, `cfg_attempts=`).
 // ---------------------------------------------------------------------------
 
 static const unsigned char SW_CONTROL_WRITE = 0x10;
@@ -206,7 +227,10 @@ static bool sensor_send_runtime_command(
   return sensor_wait_system_status(SW_SET_RUNTIME);
 }
 
-static void configure_sensor() {
+// One whole four-command configuration pass. Returns -1 when every command
+// was acknowledged, or the 0-based index of the command whose acknowledgment
+// never arrived (the F12 evidence named cmd_index=0 and cmd_index=1).
+static int configure_sensor_attempt() {
   static const unsigned char* commands[] = {
     RUNTIME_ENABLE_AIRWHEEL,
     RUNTIME_ENABLE_GESTURES,
@@ -216,16 +240,81 @@ static void configure_sensor() {
 
   for (unsigned int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
     if (!sensor_send_runtime_command(commands[i])) {
-      // The Python driver raises here; a headless controller denies boot
-      // instead, loudly, so the serial probe (P4.1) sees exactly why.
-      for (;;) {
-        Serial.print("SKYSTATE sensor_config_failed cmd_index=");
-        Serial.println(i);
-        delay(1000);
-      }
+      return (int)i;
     }
   }
-  Serial.println("SKYSTATE sensor_ok");
+  return -1;
+}
+
+// --- P3.26 configuration life cycle: attempt once at boot, retry forever ---
+//
+// While the configuration is incomplete the device is UP (radio advertising,
+// pairing, life cycle) but DEAF (no sensor events yet) — the health line
+// shows both halves of that state.
+
+static bool sensor_configured = false;
+static unsigned long sensor_config_attempts = 0;   // whole-sequence attempts
+static unsigned long sensor_config_attempt_start_ms = 0;
+static unsigned long sensor_config_next_attempt_ms = 0;
+
+// Breathing room between whole-sequence retries: each failed attempt already
+// spent up to ~10 × 4 ack windows on the bus; a short pause keeps the retry
+// cadence readable in a capture and gives a recovering sensor time to settle.
+static const unsigned long SENSOR_CONFIG_RETRY_INTERVAL_MS = 200;
+
+// The success line keeps the serial probe's `SKYSTATE sensor_ok` token and
+// names how many whole-sequence attempts it took and how long the successful
+// attempt ran — the "how long did the sensor take" instrument F12 asked for.
+static void sensor_config_report_success() {
+  sensor_configured = true;
+  Serial.print("SKYSTATE sensor_ok attempts=");
+  Serial.print(sensor_config_attempts);
+  Serial.print(" took_ms=");
+  Serial.println(millis() - sensor_config_attempt_start_ms);
+}
+
+static void sensor_config_report_failure(unsigned long attempt,
+                                         int failed_index) {
+  Serial.print("SKYSTATE sensor_config_retry attempt=");
+  Serial.print(attempt);
+  Serial.print(" cmd_index=");
+  Serial.print(failed_index);
+  Serial.print(" elapsed_ms=");
+  Serial.println(millis() - sensor_config_attempt_start_ms);
+}
+
+// setup(): one bounded whole-sequence attempt. The healthy path (the only
+// path since the supply fix) finishes here, keeping the familiar boot order;
+// a failure is recorded and the boot CONTINUES — the radio starts below.
+static void sensor_config_first_attempt() {
+  sensor_config_attempts = 1;
+  sensor_config_attempt_start_ms = millis();
+  int failed = configure_sensor_attempt();
+  if (failed < 0) {
+    sensor_config_report_success();
+    return;
+  }
+  sensor_config_report_failure(sensor_config_attempts, failed);
+  sensor_config_next_attempt_ms =
+      millis() + SENSOR_CONFIG_RETRY_INTERVAL_MS;
+}
+
+// loop(): rerun the WHOLE four-command sequence (never resume from the failed
+// command — F12's captures failed on cmd_index=0 AND cmd_index=1, so a
+// part-way stop would leave the sensor half-configured) until it completes.
+static void sensor_config_retry_tick(unsigned long now_ms) {
+  if (sensor_configured) return;
+  if ((long)(now_ms - sensor_config_next_attempt_ms) < 0) return;
+
+  sensor_config_attempts++;
+  sensor_config_attempt_start_ms = now_ms;
+  int failed = configure_sensor_attempt();
+  if (failed < 0) {
+    sensor_config_report_success();
+    return;
+  }
+  sensor_config_report_failure(sensor_config_attempts, failed);
+  sensor_config_next_attempt_ms = now_ms + SENSOR_CONFIG_RETRY_INTERVAL_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +361,12 @@ static unsigned long ble_disconnects = 0;
 static void print_health_status(unsigned long now_ms) {
   Serial.print("SKYSTATE health uptime_ms=");
   Serial.print(now_ms);
+  // P3.26: the sensor configuration's outcome — the device reports a deaf
+  // sensor and a working radio on the same line instead of denying boot.
+  Serial.print(" sensor_cfg=");
+  Serial.print(sensor_configured ? 1 : 0);
+  Serial.print(" cfg_attempts=");
+  Serial.print(sensor_config_attempts);
   // Shares are printed so they are visible without arithmetic (P4.0a T5).
   // A division by zero is impossible once polls > 0; a 0 poll count (never
   // reached in a live loop) prints 0.00%.
@@ -793,9 +888,14 @@ void setup() {
   Serial.println("SKYWRITER-HID boot");
 
   // 1. Sensor stack first (specs/ble_hid.md §6 Boot row). `Skywriter.begin`
-  //    only resets the sensor; the runtime configuration is ours.
+  //    resets the sensor with the reference timing (100 ms hold + 500 ms
+  //    settle, P3.26 part 2 — the old 10/50 ms left cold-boot
+  //    acknowledgments to chance); the runtime configuration is ours: ONE
+  //    bounded attempt here. A failed attempt is evidence and a retry from
+  //    loop() — NEVER a boot denial (P3.26: the old forever-deny made the
+  //    whole device invisible, hardware session 5's F12).
   Skywriter.begin(SKYWRITER_PIN_TS, SKYWRITER_PIN_RESET);
-  configure_sensor();
+  sensor_config_first_attempt();
 
   // 2. Route every decoded sensor event into the mapping engine.
   Skywriter.onXYZ(on_sensor_xyz);
@@ -921,9 +1021,21 @@ void loop() {
     Serial.println("SKYSTATE waiting_for_host");
   }
 
+  // P3.26: the sensor configuration retries here until it completes — the
+  // radio and the life-cycle drains above never depend on it. While the
+  // retry is running, poll() stays off for two reasons: a poll could steal
+  // the System_Status acknowledgment frame a waiting configuration command
+  // is parked on (both read the same sensor buffer over I2C), and an
+  // unconfigured sensor's padding reads would pollute the frame counters
+  // the health line reports.
+  sensor_config_retry_tick(now);
+
   // Every polled sensor frame dispatches into the mapping engine... (the
-  // callbacks drop events while no host is connected, §6 Unconnected).
-  Skywriter.poll();
+  // callbacks drop events while no host is connected, §6 Unconnected) —
+  // and polling starts only once the sensor is configured (P3.26, above).
+  if (sensor_configured) {
+    Skywriter.poll();
+  }
   // ...and the engine's timing work (lift-off gating, release-by-silence,
   // coalesced report cadence, hold auto-scroll) runs every loop iteration,
   // driven by the millis() clock.

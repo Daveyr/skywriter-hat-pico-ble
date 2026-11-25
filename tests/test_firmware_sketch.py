@@ -28,6 +28,13 @@ sketch's BTstack HCI event handler, the [7.5, 15] ms connection-parameter
 request that keeps the ≥ 60 Hz pointer-rate floor reachable, and the
 serial evidence line the hardware probe reads.
 
+The P3.26 pins carry the boot-gate rules: a failed sensor configuration
+is retried from loop() forever (never a permanent boot deny — hardware
+session 5's F12 showed the old deny made the whole device invisible),
+every failed attempt prints its own evidence line, the radio starts
+regardless of the sensor's state, and the health line carries the
+configuration outcome.
+
 Radio/GATT/RF truth is the Phase-4 hardware probes; these source-level pins
 only make a software regression (e.g. a reintroduced second `begin()`) fail
 `bash run_tests.sh` immediately.
@@ -199,14 +206,114 @@ def test_control_write_followed_by_exactly_15_payload_bytes():
 
 
 def test_every_command_waits_for_system_status_ack():
-    """The firmware waits for each command's System_Status (0x15) frame and
-    denies boot on failure (the Python driver raises) — the serial probe
-    must be able to distinguish a misconfigured sensor."""
+    """The firmware waits for each command's System_Status (0x15) frame —
+    the Python driver raises on a missing/failed ack. Since P3.26 the
+    failure is EVIDENCE and a retry (the old permanent boot deny is gone):
+    the failed attempt prints the `sensor_config_retry` line, and
+    successful bring-up still prints the `sensor_ok` line the serial
+    probe asserts on."""
     src = sketch_source()
     assert "sensor_wait_system_status(SW_SET_RUNTIME)" in src
-    assert "SKYSTATE sensor_config_failed" in src, (
-        "a failed acknowledgment must print a visible serial line")
     assert "SKYSTATE sensor_ok" in src, "successful bring-up is pinned too"
+    assert "SKYSTATE sensor_config_retry" in src, (
+        "a failed acknowledgment must print a visible serial line — and "
+        "since P3.26 that line is a retry report, not a boot denial")
+
+
+# --------------------------------- P3.26: the boot gate never denies boot ---
+# (Hardware session 5's F12: on cold boots where the sensor missed one
+# configuration acknowledgment, configure_sensor() printed
+# `sensor_config_failed` forever and the radio never started — the device
+# was invisible to every host exactly when evidence was most needed. The
+# physical cause (the starving supply) is fixed on the bench; the deny
+# DESIGN must never come back.)
+
+def test_boot_never_denies_on_sensor_config_failure():
+    """No permanent deny: the old `sensor_config_failed` forever-loop is
+    gone, setup() cannot block on the sensor beyond one bounded attempt,
+    and the radio starts regardless of the sensor's state."""
+    src = sketch_source()
+    code = sketch_code()
+    assert "sensor_config_failed" not in code, (
+        "the deny-loop evidence line must be gone (P3.26: a failed sensor "
+        "must never make the whole device invisible)")
+    assert "for (;;)" not in code, (
+        "a permanent loop must not exist anywhere in the sketch")
+    setup_body = function_body("setup")
+    assert "KeyboardBLE.begin(" in setup_body, (
+        "the radio must still start in setup()")
+    loop_body = function_body("loop")
+    assert "sensor_config_retry_tick(" in loop_body, (
+        "the sensor configuration retry runs from loop(), not setup()")
+
+
+def test_sensor_config_retry_retries_the_whole_sequence():
+    """A failed attempt retries the WHOLE four-command sequence from the
+    top, forever — the F12 captures failed on cmd_index=0 AND cmd_index=1
+    (per-command margin, not one power-on threshold), and a sequence that
+    stopped part-way would leave the sensor half-configured."""
+    tick = function_body("sensor_config_retry_tick")
+    assert "configure_sensor_attempt()" in tick, (
+        "the retry must rerun the whole sequence, not resume from the "
+        "failed command")
+    # The attempt itself iterates all four commands — same queue as the
+    # first boot attempt.
+    attempt = function_body("configure_sensor_attempt")
+    for name in ("RUNTIME_ENABLE_AIRWHEEL",
+                 "RUNTIME_ENABLE_GESTURES",
+                 "RUNTIME_ENABLE_DATA_OUTPUT",
+                 "RUNTIME_DISABLE_AUTO_CALIBRATION"):
+        assert name in attempt, f"the attempt must queue {name}"
+    # The retry keeps rescheduling itself until it succeeds — never gives
+    # up, never stops.
+    assert "sensor_config_next_attempt_ms" in tick
+
+
+def test_sensor_config_retry_prints_per_attempt_evidence():
+    """Each failed attempt prints one loud serial line naming the attempt
+    number, the command that failed, and how long the attempt took — the
+    capture instrument F12 asked for (how long the sensor needed)."""
+    src = sketch_source()
+    assert "SKYSTATE sensor_config_retry attempt=" in src
+    assert "cmd_index=" in src
+    assert "elapsed_ms=" in src
+
+
+def test_sensor_config_success_line_carries_attempts_and_duration():
+    """The success line keeps the probe's `SKYSTATE sensor_ok` token and
+    now names how many attempts it took and how long the successful
+    attempt ran — so a capture shows the sensor's recovery time."""
+    src = sketch_source()
+    assert "SKYSTATE sensor_ok attempts=" in src
+    assert "took_ms=" in src
+
+
+def test_health_line_reports_sensor_config_outcome():
+    """P3.26 part 3: the sensor configuration's outcome lives on the
+    health line (`sensor_cfg=` 0/1, `cfg_attempts=N`) instead of gating
+    the whole device — a capture sees a deaf sensor and a working radio
+    on the same line."""
+    body = function_body("print_health_status")
+    assert "sensor_cfg=" in body
+    assert "sensor_configured" in body
+    assert "cfg_attempts=" in body
+    assert "sensor_config_attempts" in body
+
+
+def test_sensor_polling_waits_for_configuration():
+    """While the configuration is still retrying, poll() stays off: a poll
+    could steal the System_Status acknowledgment frame the waiting
+    command is parked on (both read the same sensor buffer over I2C),
+    and an unconfigured sensor's padding would pollute the frame
+    counters. The retry tick runs first; poll starts only once
+    configured."""
+    loop_body = function_body("loop")
+    tick_at = loop_body.index("sensor_config_retry_tick(")
+    gate_at = loop_body.index("if (sensor_configured)")
+    poll_at = loop_body.index("Skywriter.poll()")
+    assert tick_at < gate_at < poll_at, (
+        "loop() must retry the configuration first, then poll only the "
+        "configured sensor")
 
 
 # ------------------------------------------------------------- wiring pins

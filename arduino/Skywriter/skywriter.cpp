@@ -11,9 +11,17 @@ void _SkyWriter::begin(unsigned char pin_xfer, unsigned char pin_reset){
   pinMode(this->xfer, INPUT_PULLUP);
   pinMode(this->rst,  OUTPUT);
   digitalWrite(this->rst, LOW);
-  delay(10);
+  // Reference reset timing (fix item P3.26, part 2): hold the sensor in
+  // reset for 100 ms and give it 500 ms to settle after release — the
+  // Python driver's reset() numbers (library/skywriter/__init__.py, whose
+  // comment cites the datasheet's 200 ms boot delay "plus change"). The
+  // former 10 ms hold + 50 ms settle were both under the datasheet's own
+  // boot-delay figure, which left cold-boot command acknowledgments to
+  // chance (hardware session 5's F12 captures: the sensor sometimes
+  // answered one configuration command, then went quiet).
+  delay(100);
   digitalWrite(this->rst, HIGH);
-  delay(50);
+  delay(500);
 }
 
 void _SkyWriter::poll(){

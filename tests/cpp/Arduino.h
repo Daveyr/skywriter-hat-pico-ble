@@ -24,7 +24,7 @@
 #define HIGH           1
 
 // One recorded GPIO call. kind 0 = pinMode(pin, value), kind 1 =
-// digitalWrite(pin, value).
+// digitalWrite(pin, value), kind 2 = delay(value ms) — pin unused.
 struct PinAction {
   uint8_t kind;
   uint8_t pin;
