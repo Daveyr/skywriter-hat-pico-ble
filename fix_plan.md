@@ -549,6 +549,24 @@ docker run -it --rm \
     after the laptop's Bluetooth off/on). P4.0a is closed (Done
     section) and P4.0 — the gesture acceptance run — is unblocked;
     the loop's next open items are §3g's P3.26–P3.28.
+    Update (2026-11-25, loop iteration after HW_REPORT.md round 5): the
+    report's record is consumed into this ledger and the file is removed
+    (PROMPT.md protocol: facts live here, the file exists only between the
+    hardware loop writing it and the inner loop consuming it). Outcome by
+    finding: F8–F16 were already recorded here and in the Done entries
+    (H7 refuted, the Bluetooth bounce root-caused host-side, the fresh-
+    pairing radio evidence, AC-BLE-06's official pass, the supply starvation
+    measured and fixed — the part-broken 3V3 feed wire, F16); F17/F18 are
+    the 2026-11-25 acceptance sessions recorded in P4.0's item (still hand
+    completely quiet — the "noisy sensor" hypothesis is dead for the still
+    case and the host-facing output is event-driven; every close-range
+    touch channel works end-to-end; hover-range motion produced NOTHING —
+    hypotheses (i)–(iii) in P4.0; AirWheel verdict deferred behind hover
+    detection; the pointer channel still awaits a moving-hover proof). No
+    new code-fixable failure came out of the round that is not already a
+    work item: the open items are P3.26 (closed this iteration), P3.27,
+    P3.28 and P3.29. `bash run_tests.sh` green 4/4, 131 pytest tests; the
+    SkywriterController sketch compiles at 22 % flash / 34 % RAM (unchanged).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -667,30 +685,7 @@ new leading suspect H7)
 evidence and verdicts in P4.0a's and P4.3's session-5 updates and the
 round's `HW_REPORT.md`)
 
-- [ ] P3.26 **The boot gate must never make the device invisible.** In
-      plain language: the firmware refuses to start its radio until the
-      gesture sensor acknowledges all four configuration commands — on
-      failure `configure_sensor()` prints `SKYSTATE sensor_config_failed
-      cmd_index=N` forever and the device is invisible to any host.
-      Hardware session 5 captured cold boots failing at cmd_index=0 AND
-      cmd_index=1 (the starving sensor sometimes answered one command,
-      then went quiet — the measured cause is in P4.0a's session-5
-      update), which is why the laptop could not see the device after a
-      power cycle and "power cycling does not work" was first misread
-      as a pairing failure. The supply starvation is the physical
-      cause, but the deny-boot design turned a sensor hiccup into a
-      silent, undiscoverable device exactly when evidence was most
-      needed. Fix, three parts:
-      * retry the whole four-command sequence until it completes —
-        never a permanent deny — with loud per-retry serial evidence
-        lines so a capture shows how long the sensor took;
-      * adopt the reference driver's reset timing (100 ms reset hold +
-        500 ms settle after release — the Python driver's `reset()`
-        numbers, whose comment cites the datasheet's 200 ms boot delay;
-        the sketch currently holds 10 ms and waits 50 ms);
-      * start the radio REGARDLESS of sensor state, with the sensor
-        configuration's outcome reported on the health line instead of
-        gating the entire device.
+- [x] P3.26 → done, moved to the Done section below.
 - [ ] P3.27 **The connect drain runs once per link, not once per
       subscription.** In plain language: a host "subscribes" to the
       device's reports by writing one enable switch per report channel —
@@ -1064,7 +1059,10 @@ item names what needs the Pico W plugged in.
 - [ ] P4.4 Outer loop driver `ralph_hw.sh` + `HW_REPORT.md` protocol: run the
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
-      on its next start once `HW_REPORT.md` exists.
+      on its next start once `HW_REPORT.md` exists. The file's life is
+      exactly one round: the hardware loop writes it, the inner loop
+      records the outcome here and REMOVES it (PROMPT.md protocol — done
+      for round 5 on 2026-11-25).
       Note (2026-11-19): the `ff5d36f` retirement of `HW_REPORT.md` broke
       this handshake — `ralph.sh` refused to consume the `READY_FOR_HW`
       marker without the file. `HW_REPORT.md` is recreated with the session-4
@@ -1202,6 +1200,73 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.26 — the boot gate can never make the device invisible (commit
+  `548e63b`): a failed sensor configuration is EVIDENCE and a RETRY,
+  never a boot denial. In plain language: the controller used to refuse
+  to start its Bluetooth radio until the gesture sensor acknowledged
+  all four start-up settings — on a cold boot where the sensor missed
+  one (hardware session 5's F12 captures: cmd_index=0 AND cmd_index=1
+  on separate boots, the starving supply's doing), it printed an error
+  line forever and stayed invisible to every host, which is why "power
+  cycling does not work" was first misread as a pairing failure. The
+  three parts of the item, as landed:
+  - **Retry the whole sequence, forever, loudly.** `setup()` runs ONE
+    bounded whole-sequence attempt (the healthy path keeps the familiar
+    boot order, `SKYSTATE sensor_ok` before `hid_started`); a failure
+    prints `SKYSTATE sensor_config_retry attempt=N cmd_index=K
+    elapsed_ms=T` and boot CONTINUES. `loop()`'s
+    `sensor_config_retry_tick()` reruns the WHOLE four-command sequence
+    (never resumes from the failed command — F12's per-command margin
+    makes a part-way stop a half-configured sensor) every
+    `SENSOR_CONFIG_RETRY_INTERVAL_MS` = 200 ms until it completes;
+    success prints `SKYSTATE sensor_ok attempts=N took_ms=T` (the
+    probe's token survives, now with the recovery instrument F12 asked
+    for). Design decision recorded: NO reset pulse between retry
+    attempts — a mid-retry reset would add 600 ms per attempt and the
+    transfer-line discipline (P3.23) plus the item's own reset-timing
+    part already cover the recovery paths a reset would address; a
+    sensor wedged beyond that needs a human power cycle, and the
+    attempts-climbing evidence names it.
+  - **Reference reset timing.** `arduino/Skywriter/skywriter.cpp`
+    `begin()` now holds the reset line LOW 100 ms and gives the sensor
+    500 ms to settle after release — the Python driver's `reset()`
+    numbers, whose comment cites the datasheet's 200 ms boot delay;
+    the old 10 ms hold / 50 ms settle were both under that figure
+    (the timing lives in the shared library, which is what the sketch's
+    bring-up calls).
+  - **The radio starts regardless; the health line carries the
+    outcome.** `setup()` proceeds to the Bluetooth bring-up whatever
+    the attempt did; `print_health_status()` gained `sensor_cfg=0|1`
+    and `cfg_attempts=N` right after uptime. While unconfigured,
+    `Skywriter.poll()` stays off (decision recorded: a poll could steal
+    the System_Status acknowledgment frame a waiting command is parked
+    on — both read the same sensor buffer over I2C — and an
+    unconfigured sensor's padding reads would pollute the frame
+    counters); the BLE life-cycle drains and the health line keep
+    running, so the device is UP but DEAF, visible on the health line.
+  - Specs: `ble_hid.md` §6 Boot row gained the P3.26 implementation
+    note (bounded step, never a gate; the evidence-line formats; the
+    polling rule) — no deviation row, the spec and code were aligned in
+    the same change.
+  - Test-first discipline held: 7 new/updated source pins in
+    `tests/test_firmware_sketch.py` FAILED against the old sketch (the
+    deny-line pin, the deny-loop absence, the retry shape, the per-
+    attempt evidence, the success line fields, the health-line fields,
+    the poll gate), and the new behavioural test
+    `tests/test_driver_reset_timing.py` FAILED with "delays recorded:
+    [10, 50]" — the real driver's `begin()` compiled for the host
+    behind the shims (which now record `delay()` calls in order, kind 2
+    in the `PinAction` log; new host program
+    `tests/cpp/host_reset_timing_main.cpp`), asserting the exact
+    reset-LOW → 100 ms → reset-HIGH → 500 ms sequence. Green after:
+    131 pytest tests; `bash run_tests.sh` 4/4; the sketch compiles at
+    22 % flash / 34 % RAM (unchanged).
+  - Environment note for future iterations: this container instance
+    again had no host C++ compiler (`g++`/`zig` absent) — the
+    documented fallback was installed with
+    `pip install --user --break-system-packages ziglang` (the same
+    step P3.1's environment note and the 2026-11-19 iteration needed;
+    it is container-local state, not repo state).
 - P4.0a — CLOSED (2026-11-24; no code change — resolved on the bench):
   the "no input reaches the laptop" gate is RESOLVED — the
   sensor-side fault was PHYSICAL, found and fixed. In plain language:
