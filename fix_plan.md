@@ -630,6 +630,23 @@ docker run -it --rm \
     the sensor's environment health during the hover experiments. New
     open item P3.30 (the Raspberry Pi Python driver should surface the
     same SystemInfo byte for the P4.0 hypothesis (iii) cross-check).
+    Update (2026-11-25, P3.30 commit `1f901f7`): the Raspberry Pi Python
+    driver now surfaces the same SystemInfo health byte the Arduino side
+    has printed since P3.29 — every decoded sensor-data frame records the
+    raw byte as the `skywriter.sysinfo` module state, set before the
+    validity branches so the bit 4 EnvironmentalNoise and bit 5 Clipping
+    health bits survive frames where nothing else is valid; named bit
+    constants (SW_SYS_POSITION/AIRWHEEL/NOISE/CLIPPING/DSP_RUNNING)
+    replace the bare bit patterns in the two validity checks. The P4.0
+    hypothesis (iii) Raspberry Pi cross-check can now read the same
+    evidence on the sensor's native platform. 4 new offline tests
+    (tests/test_driver_sysinfo_python.py, the Python twin of the C++
+    test_driver_sysinfo.py) verified failing first; 152 pytest tests;
+    `run_tests.sh` green 4/4; all four sketches compile unchanged.
+    With P3.30 every §3 software item is done — the remaining open items
+    are all Phase 4 (hardware) or Phase 5 (gated on hardware), so this
+    iteration wrote the `READY_FOR_HW` marker for the P4.0 acceptance
+    run.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -756,22 +773,7 @@ round's `HW_REPORT.md`)
 acceptance session; evidence in P4.0's 2026-11-25 update)
 
 - [x] P3.29 → done, moved to the Done section below (commit `672e128`).
-- [ ] P3.30 **Surface the SystemInfo byte in the Raspberry Pi Python
-      driver (`library/skywriter/__init__.py`).** In plain language: the
-      sensor attaches a one-byte status report (SystemInfo) to every
-      data frame it sends, and two of its bits are the sensor's own
-      health report — bit 4 EnvironmentalNoise ("environmental noise
-      has been detected") and bit 5 Clipping ("the ADCs are clipping").
-      P3.29 made the Arduino driver record it as public state
-      (`last_sysinfo`) and the firmware print it; the Python driver
-      still discards the byte. The P4.0 acceptance run's hypothesis
-      (iii) may need the Raspberry Pi cross-check with THIS repo's
-      Python driver (the sensor's native platform), and that session
-      should see the same evidence surface: record the raw byte per
-      decoded sensor-data frame as module state (the `rotation` /
-      `_lastrotation` module-global style) and expose it without new
-      hardware access — keep every test offline and mocked
-      (`library/test.py`, the P3.11c fixture pattern).
+- [x] P3.30 → done, moved to the Done section below (commit `1f901f7`).
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -1235,6 +1237,49 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.30 — the Raspberry Pi Python driver surfaces the sensor's own
+  health byte (commit `1f901f7`). In plain language: every data frame
+  the sensor sends carries a one-byte status report (SystemInfo,
+  Interface.pdf §4.5 Table 4-10); two of its bits are the sensor's own
+  health report — bit 4 EnvironmentalNoise ("environmental noise has
+  been detected") and bit 5 Clipping ("the ADCs are clipping"). P3.29
+  made the Arduino driver record it as public state (`last_sysinfo`)
+  and the firmware print it; the Python driver — the sensor's native
+  platform, and the one the P4.0 hypothesis (iii) cross-check would run
+  on — still discarded the byte. What landed:
+  - **`skywriter.sysinfo`** — module state like `gesture`/x/y/z: the
+    raw SystemInfo byte of the last decoded sensor-data frame, set on
+    EVERY frame BEFORE the validity branches (the Arduino
+    `last_sysinfo` rule), so the health report survives even when no
+    payload field is valid. Handlers read it alongside their own
+    arguments — the cross-check session's `@skywriter.move()` handler
+    logs the health bits per event with no new hardware access.
+  - **Named constants for the byte's fields** — SW_SYS_POSITION
+    (bit 0), SW_SYS_AIRWHEEL (bit 1), SW_SYS_NOISE (bit 4),
+    SW_SYS_CLIPPING (bit 5), SW_SYS_DSP_RUNNING (bit 7) — mirroring
+    the Arduino driver's SW_SYS_POSITION/SW_SYS_AIRWHEEL; the two
+    validity checks in `_handle_sensor_data` now use them instead of
+    bare bit patterns.
+  - The replay harness resets `sysinfo` per session (fresh decoder
+    state), and `specs/ble_hid.md` §6's P3.29 note gained the P3.30
+    cross-reference (both platforms now share the evidence surface).
+  - Test-first discipline held: 4 new offline tests
+    (tests/test_driver_sysinfo_python.py, the Python twin of
+    tests/test_driver_sysinfo.py) drive the REAL `_do_poll()` against
+    a mocked bus (the P3.11c fixture pattern): a mask-0 frame carrying
+    only the noise+clipping bits (0x30) dispatches nothing yet records
+    the byte; the recorded F01 fixture's own byte (0x81 =
+    PositionValid|DSPRunning) wins over an earlier frame's; an
+    AirWheel-valid frame records its bit while baselining silently; a
+    handler reads the byte DURING its own callback. All 4 verified
+    FAILING against the pre-change code first (`sysinfo` did not
+    exist). 152 pytest tests; `bash run_tests.sh` green 4/4; all four
+    sketches compile unchanged (22 % flash / 34 % RAM).
+  - On hardware: no reflash is needed for THIS change (it lives in the
+    Raspberry Pi driver, not the Pico W firmware) — it equips the P4.0
+    hypothesis (iii) cross-check: run this repo's Python driver on a
+    Raspberry Pi with the sensor HAT and read `skywriter.sysinfo`'s
+    noise/clipping bits during the same hover exercises.
 - P3.29 — the per-event evidence trace is live, and the sensor's own
   health bits are surfaced at last (commit `672e128`). In plain
   language: the two-second status line's counters can say WHICH channels
