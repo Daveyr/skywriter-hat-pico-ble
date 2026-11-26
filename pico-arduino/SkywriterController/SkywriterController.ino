@@ -57,6 +57,18 @@
     SystemInfo byte) — off by default so the 200 Hz position path stays
     quiet; enable it for acceptance-run builds with
     SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh pico-arduino/SkywriterController.
+    And since fix item P3.31 the fourth sensor-configuration command's
+    label tells the truth: the legacy payload actually ENABLES all five
+    masked auto-calibration features (the datasheet's bit semantics are
+    inverted from the old comment — a bit CLEARED in Argument0 enables
+    the feature), and the genuine disable is a compile-time experiment —
+    SKYWRITER_CAL_DISABLE=1 (all five off) or
+    SKYWRITER_CAL_DISABLE_IDLE=1 (idle only) via flash.sh — OFF by
+    default, named on the `sensor_ok` and health lines as `cal=` so a
+    serial capture can never mistake the experiment build for the
+    default. Its hardware judgement: PASS = the health line's `clip=`
+    clears and hover produces position frames (the 2026-11-26 clipping
+    investigation's next lever).
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -196,11 +208,105 @@ static const unsigned char RUNTIME_ENABLE_DATA_OUTPUT[SW_SET_RUNTIME_PAYLOAD_SIZ
   0x1F, 0x00, 0x00, 0x00,
   0x1F, 0x00, 0x00, 0x00 };
 
-// 4. Disable auto-calibration (the Python driver's default).
-static const unsigned char RUNTIME_DISABLE_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE] = {
+// 4. Auto-calibration operating mode (dspCalOpMode, runtime parameter ID
+//    0x80) — P3.31 semantics correction + the experiment build.
+//
+//    THE OLD LABEL WAS WRONG. This command was labelled "Disable
+//    auto-calibration" after the Python driver's comment, but the
+//    datasheet's bit semantics are the opposite (Interface.pdf §4.4.5.3,
+//    Calibration Operation Mode): a bit CLEARED (0) in Argument0 ENABLES
+//    its auto-calibration feature, a bit SET (1) DISABLES it, and
+//    Argument1 is the mask of the Argument0 bits to apply (bits outside
+//    the mask keep their current value). The payload this firmware has
+//    always sent (Argument0 = 0x00, mask = 0x1F) therefore ENABLES all
+//    five masked features:
+//      bit 0 start-up calibration
+//      bit 1 gesture-triggered calibration
+//      bit 2 negative calibration
+//      bit 3 idle calibration
+//      bit 4 invalidity-value calibration
+//    (bit 5, calibration triggered by AFA — the adaptive filter — sits
+//    outside the 0x1F mask and keeps the chip default). Auto-calibration
+//    has been fully ON in every build so far.
+//
+//    Why that now matters (hardware session 6, findings F19/F23): the
+//    sensor's own Clipping health bit (SystemInfo bit 5, "the ADCs are
+//    clipping" — the analog-to-digital receiver is saturated) has been
+//    set on EVERY frame ever captured, including the FIRST data frame of
+//    a fresh boot with no hand near, while supply, mounting and baseline
+//    drift are eliminated. Idle calibration continuously re-adjusts the
+//    electrode baselines; a poisoned baseline rails the receiver — which
+//    is exactly what the Clipping bit reports. The one working window
+//    (2026-11-24, ~4 minutes of position) fits start-up calibration good
+//    → idle calibration poisoning it later. The auto-calibration suite
+//    is the one untested vendor mechanism left touching the analog
+//    operating point.
+//
+//    Experiment variants (compile-time gated, both OFF by default — the
+//    default build keeps the legacy payload byte-for-byte, behaviour
+//    unchanged):
+//      SKYWRITER_CAL_DISABLE=1       the GENUINE disable: Argument0 =
+//                                   0x1F, mask = 0x1F — all five masked
+//                                   features OFF. (The vendor's own
+//                                   Appendix A "Disable" example also
+//                                   sets bit 5/AFA: 0x3F/0x3F; this
+//                                   experiment changes ONLY the five
+//                                   bits the legacy command already
+//                                   masked, so one variable changes at
+//                                   a time.)
+//      SKYWRITER_CAL_DISABLE_IDLE=1  the fallback: only idle calibration
+//                                   off (Argument0 bit 3, mask bit 3) —
+//                                   narrows which feature poisons the
+//                                   baseline if the full disable
+//                                   misbehaves.
+//    flash.sh forwards either knob (they combine with
+//    SKYWRITER_EVENT_TRACE=1 for the acceptance instrument), and the
+//    serial console names the active variant (`cal=` on the sensor_ok
+//    and health lines) so a capture can never mistake the experiment
+//    build for the default. Hardware judgement (next reflash, forget +
+//    re-pair first): PASS = the health line's clip= clears and hover
+//    produces position frames; FAIL = clip=1 still set, which leaves the
+//    damaged-board hypothesis (the blocked Raspberry Pi cross-check).
+#ifndef SKYWRITER_CAL_DISABLE
+#define SKYWRITER_CAL_DISABLE 0
+#endif
+
+#ifndef SKYWRITER_CAL_DISABLE_IDLE
+#define SKYWRITER_CAL_DISABLE_IDLE 0
+#endif
+
+#if SKYWRITER_CAL_DISABLE
+// The genuine disable: every masked feature bit SET (bit set = disabled).
+static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE] = {
+  0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,
+  0x1F, 0x00, 0x00, 0x00,
+  0x1F, 0x00, 0x00, 0x00 };
+#elif SKYWRITER_CAL_DISABLE_IDLE
+// The idle-only fallback: only bit 3 (idle calibration) SET and masked.
+static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE] = {
+  0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,
+  0x08, 0x00, 0x00, 0x00,
+  0x08, 0x00, 0x00, 0x00 };
+#else
+// The legacy payload (the Python driver's historical bytes — actually
+// ENABLES all five masked features; behaviour deliberately unchanged).
+static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE] = {
   0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,
   0x00, 0x00, 0x00, 0x00,
   0x1F, 0x00, 0x00, 0x00 };
+#endif
+
+// The active variant's name for the serial evidence (P3.31): the token
+// names WHAT this build configures, on both the sensor_ok boot line and
+// the repeating health line — a capture can never mistake the experiment
+// build for the default, even when the monitor attaches after boot.
+#if SKYWRITER_CAL_DISABLE
+#define SKYWRITER_CAL_VARIANT_NAME "disable_all"
+#elif SKYWRITER_CAL_DISABLE_IDLE
+#define SKYWRITER_CAL_VARIANT_NAME "disable_idle"
+#else
+#define SKYWRITER_CAL_VARIANT_NAME "legacy_all_enabled"
+#endif
 
 // Wait for the sensor's System_Status acknowledge of `msg_id`, exactly like
 // the Python driver's `get_status()`: up to 10 attempts, 1 ms apart, each
@@ -256,7 +362,7 @@ static int configure_sensor_attempt() {
     RUNTIME_ENABLE_AIRWHEEL,
     RUNTIME_ENABLE_GESTURES,
     RUNTIME_ENABLE_DATA_OUTPUT,
-    RUNTIME_DISABLE_AUTO_CALIBRATION,
+    RUNTIME_AUTO_CALIBRATION,
   };
 
   for (unsigned int i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
@@ -286,12 +392,17 @@ static const unsigned long SENSOR_CONFIG_RETRY_INTERVAL_MS = 200;
 // The success line keeps the serial probe's `SKYSTATE sensor_ok` token and
 // names how many whole-sequence attempts it took and how long the successful
 // attempt ran — the "how long did the sensor take" instrument F12 asked for.
+// P3.31: it also names the auto-calibration variant this build configures
+// (`cal=`) — the experiment's identity on the boot line (the health line
+// repeats it for late-attached monitors).
 static void sensor_config_report_success() {
   sensor_configured = true;
   Serial.print("SKYSTATE sensor_ok attempts=");
   Serial.print(sensor_config_attempts);
   Serial.print(" took_ms=");
-  Serial.println(millis() - sensor_config_attempt_start_ms);
+  Serial.print(millis() - sensor_config_attempt_start_ms);
+  Serial.print(" cal=");
+  Serial.println(SKYWRITER_CAL_VARIANT_NAME);
 }
 
 static void sensor_config_report_failure(unsigned long attempt,
@@ -388,6 +499,12 @@ static void print_health_status(unsigned long now_ms) {
   Serial.print(sensor_configured ? 1 : 0);
   Serial.print(" cfg_attempts=");
   Serial.print(sensor_config_attempts);
+  // P3.31: a compile-time constant, but the experiment's identity must be
+  // visible even when the monitor attaches after boot (session 2's capture
+  // missed the boot lines) — and it sits right next to the clip= field the
+  // experiment's own judgement reads.
+  Serial.print(" cal=");
+  Serial.print(SKYWRITER_CAL_VARIANT_NAME);
   // Shares are printed so they are visible without arithmetic (P4.0a T5).
   // A division by zero is impossible once polls > 0; a 0 poll count (never
   // reached in a live loop) prints 0.00%.

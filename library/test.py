@@ -92,7 +92,9 @@ class TestSetupHandshake(unittest.TestCase):
         bus = self.smbus.SMBus.return_value
 
         # Four SET_RUNTIME_PARAMETER commands are written to configure the
-        # sensor (AirWheel, gestures, data outputs, auto-calibration off).
+        # sensor (AirWheel, gestures, data outputs, and the legacy
+        # auto-calibration payload — which ENABLES all five masked
+        # auto-calibration features, P3.31: the "disable" label was wrong).
         self.assertEqual(bus.write_i2c_block_data.call_count, 4)
         for call in bus.write_i2c_block_data.call_args_list:
             address, register, _payload = call.args

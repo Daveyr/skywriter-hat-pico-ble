@@ -80,6 +80,13 @@ fixture_replay() {
 # don't touch Bluetooth.
 # Build output goes to a temporary directory so the flash-tool-managed
 # build/ folders are never touched.
+#
+# P3.31: the controller sketch is additionally compiled in BOTH calibration
+# experiment variants — its `#if SKYWRITER_CAL_DISABLE` / `#elif
+# SKYWRITER_CAL_DISABLE_IDLE` branches are never compiled by the default
+# build above, and the hardware loop flashes exactly these builds (the
+# first with the acceptance trace enabled, which also exercises the trace
+# region and the two-switch combination).
 sketch_compile() {
   if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "arduino-cli not installed — compile check skipped (the dev container provides it)"
@@ -93,6 +100,14 @@ sketch_compile() {
     echo "compiling $dir"
     arduino-cli compile -b "$FQBN" --output-dir "$out/$(basename "$dir")" "$dir" || rc=1
   done < <(find pico-arduino arduino -name '*.ino' -not -path '*/build/*' 2>/dev/null)
+  echo "compiling pico-arduino/SkywriterController (P3.31 experiment: full calibration disable + acceptance trace)"
+  arduino-cli compile -b "$FQBN" \
+    --build-property "compiler.cpp.extra_flags=-DSKYWRITER_EVENT_TRACE=1 -DSKYWRITER_CAL_DISABLE=1" \
+    --output-dir "$out/experiment_cal_full" pico-arduino/SkywriterController || rc=1
+  echo "compiling pico-arduino/SkywriterController (P3.31 experiment: idle-only calibration disable)"
+  arduino-cli compile -b "$FQBN" \
+    --build-property "compiler.cpp.extra_flags=-DSKYWRITER_CAL_DISABLE_IDLE=1" \
+    --output-dir "$out/experiment_cal_idle" pico-arduino/SkywriterController || rc=1
   rm -rf "$out"
   return $rc
 }

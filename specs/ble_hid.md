@@ -178,7 +178,10 @@ compile-time gated, OFF by default because the 200 Hz position path
 would flood the serial port at full rate. Enable them for an
 acceptance-run build with `SKYWRITER_EVENT_TRACE=1 ./pico-arduino/flash.sh …`
 (flash.sh forwards the switch as a `-D` compiler definition via
-`--build-property build.extra_flags=`), and position lines are
+`--build-property`; the property slot was corrected to
+`compiler.cpp.extra_flags` by the P3.31 note below — `build.extra_flags`
+is the board's own flag slot and must never be overridden), and
+position lines are
 rate-limited to one per 50 ms even when enabled (touch / gesture / wheel
 events are rare and print every one). The always-on health line now also
 carries `sysinfo=0xNN noise= clip=` — the latest sensor-data frame's
@@ -191,6 +194,54 @@ sensor-data frame records the raw SystemInfo byte as the
 `last_sysinfo`, set on every frame before the validity branches), so a
 registered handler — or the cross-check session — reads the health bits
 alongside the event arguments with no new hardware access.
+
+Implementation note (P3.31, 2026-11-26): the fourth bring-up command's
+label is corrected and its payload is now experiment-selectable. The
+datasheet's bit semantics for dspCalOpMode (Interface.pdf §4.4.5.3,
+runtime parameter ID 0x80) are INVERTED from the comment both drivers
+carried: a bit CLEARED (0) in Argument0 ENABLES its auto-calibration
+feature, a bit SET (1) DISABLES it, and Argument1 is the mask of the
+Argument0 bits to apply — so the legacy payload (Argument0 = 0x00, mask
+0x1F) actually ENABLES all five masked features (start-up,
+gesture-triggered, negative, idle and invalidity-value calibration; the
+AFA bit 5 sits outside the mask and keeps the chip default), and
+auto-calibration has been fully ON in every build so far. The comment
+correction is comments-only (both drivers keep sending the legacy bytes
+by default); the genuine disable is a compile-time EXPERIMENT variant of
+the firmware, OFF by default: `SKYWRITER_CAL_DISABLE=1` sends
+Argument0 = 0x1F / mask = 0x1F (all five masked features off — the
+vendor's own Appendix A "Disable" example also clears bit 5/AFA as
+0x3F/0x3F; the experiment deliberately changes only the five bits the
+legacy command already masked) and `SKYWRITER_CAL_DISABLE_IDLE=1` sends
+Argument0 bit 3 / mask bit 3 (idle calibration only, the fallback if the
+full disable misbehaves). flash.sh forwards either knob and they combine
+with the acceptance trace switch
+(`SKYWRITER_EVENT_TRACE=1 SKYWRITER_CAL_DISABLE=1 ./pico-arduino/flash.sh …`)
+— all requested `-D` definitions fold into ONE space-separated
+`compiler.cpp.extra_flags` value, because repeated same-key
+`--build-property` values are last-one-wins in arduino-cli, and because
+`build.extra_flags` is the BOARD'S OWN flag slot (boards.txt gives the
+Pico W `-DPICO_CYW43_SUPPORTED=1` through it): overriding that slot —
+the mechanism P3.29 originally used — compiles the core WITHOUT the
+WiFi/Bluetooth driver while arduino-cli caches the broken core archive
+per FQBN, after which every build of that FQBN fails with
+`undefined reference to init_cyw43_wifi` until the core cache entry is
+deleted (verified 2026-11-26 in a fresh container; the host had survived
+it latently because its core cache had been built by a property-free
+build first). The serial console names the active variant as
+`cal=` on both the `SKYSTATE sensor_ok` boot line and the repeating
+health line (`legacy_all_enabled` / `disable_all` / `disable_idle`), so
+a capture can never mistake the experiment build for the default —
+hardware session 6 (findings F19/F23) found the sensor's Clipping health
+bit set from the FIRST data frame of every fresh boot while supply,
+mounting and baseline drift are eliminated, which leaves the
+auto-calibration suite (idle calibration continuously re-adjusting the
+electrode baselines) as the one untested vendor mechanism that can rail
+the receiver. Hardware judgement for the experiment (next reflash,
+forget + re-pair on the host first): PASS = the health line's `clip=`
+clears and hover produces position frames; FAIL = `clip=1` still set,
+which leaves the damaged-board hypothesis (the blocked Raspberry Pi
+cross-check, F24).
 
 ## 7. Performance
 

@@ -70,6 +70,11 @@ rotation = 0.0
 # _handle_sensor_data).
 _lastrotation = None
 _round_to = 4
+# Historical switch for the setup() auto-calibration command (P3.31
+# note: the name predates the semantics correction — False (default)
+# sends the legacy dspCalOpMode payload, which ENABLES all five masked
+# auto-calibration features; True skips the command entirely, leaving
+# the chip's default — also fully ON. See the setup() comment).
 _enable_auto_calibration = False
 _enable_events = True
 _debug = False
@@ -842,10 +847,24 @@ def setup():
     if not get_status(0xA2):
         raise RuntimeError("Invalid response for SET_RUNTIME_PARAMETER")
 
-    # Disable auto-calibration
+    # Auto-calibration operating mode (dspCalOpMode, runtime parameter
+    # ID 0x80) — fix item P3.31's semantics correction, behaviour
+    # UNCHANGED. The old comment (and debug label) called this "Disable
+    # auto-calibration"; the datasheet's bit semantics are the opposite
+    # (Interface.pdf §4.4.5.3, Calibration Operation Mode): a bit CLEARED
+    # (0) in Argument0 ENABLES its auto-calibration feature, a bit SET
+    # (1) DISABLES it, and Argument1 is the mask of the Argument0 bits to
+    # apply. The payload below (Argument0 = 0x00, mask 0x1F) therefore
+    # ENABLES all five masked features: start-up, gesture-triggered,
+    # negative, idle and invalidity-value calibration (bit 5, calibration
+    # triggered by AFA, is outside the mask and keeps the chip default).
+    # Auto-calibration has been fully ON in every session of this driver;
+    # the genuine disable is an EXPERIMENT on the Pico W firmware side
+    # (fix item P3.31's SKYWRITER_CAL_DISABLE build flag), not a default
+    # change here.
     if not _enable_auto_calibration:
         if _debug:
-            print("Disable auto-calibration")
+            print("Set dspCalOpMode: legacy payload (Argument0=0x00 mask 0x1F — ENABLES all five masked auto-calibration features)")
         i2c.write_i2c_block_data(SW_ADDR, 0x10, [0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,   0x00, 0x00, 0x00, 0x00,        0b00011111, 0x00, 0x00, 0x00])  # noqa: E241
         if not get_status(0xA2):
             raise RuntimeError("Invalid response for SET_RUNTIME_PARAMETER")

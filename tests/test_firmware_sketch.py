@@ -41,6 +41,18 @@ connection), so the battery/resync drain is armed only on the link's
 FIRST opened event (latched, cleared on the closed event) — one link
 drains exactly once and `ble conn=` counts links.
 
+The P3.31 pins carry the auto-calibration semantics correction + the
+genuine-disable experiment: the legacy command-4 payload (Argument0 =
+0x00, mask = 0x1F) actually ENABLES all five masked auto-calibration
+features (Interface.pdf §4.4.5.3, dspCalOpMode: a bit CLEARED in
+Argument0 enables the feature, a bit SET disables it, Argument1 is the
+mask — the old "Disable auto-calibration" label had it backwards), the
+corrected comments say so, and the genuine disable (Argument0 = 0x1F /
+mask = 0x1F) plus the idle-only fallback (0x08/0x08) are compile-time
+variants, OFF by default, named on the serial console (`cal=` on the
+sensor_ok and health lines) so a capture can never mistake the
+experiment build for the default.
+
 Radio/GATT/RF truth is the Phase-4 hardware probes; these source-level pins
 only make a software regression (e.g. a reintroduced second `begin()`) fail
 `bash run_tests.sh` immediately.
@@ -167,7 +179,7 @@ def test_four_runtime_commands_sent_by_firmware():
     for name in ("RUNTIME_ENABLE_AIRWHEEL",
                  "RUNTIME_ENABLE_GESTURES",
                  "RUNTIME_ENABLE_DATA_OUTPUT",
-                 "RUNTIME_DISABLE_AUTO_CALIBRATION"):
+                 "RUNTIME_AUTO_CALIBRATION"):
         assert f"const unsigned char {name}[" in src, f"missing {name}"
         assert f"    {name}," in src, f"{name} not queued in configure_sensor"
 
@@ -190,7 +202,9 @@ def test_runtime_payloads_match_python_reference():
         "0x00, 0x00, 0xA2,   0xA0, 0x00,   0x00, 0x00,\n"
         "  0x1F, 0x00, 0x00, 0x00,\n"
         "  0x1F, 0x00, 0x00, 0x00",
-        # Disable auto-calibration.
+        # The legacy auto-calibration payload (P3.31 semantics correction:
+        # it actually ENABLES all five masked auto-calibration features —
+        # the "Disable" label was wrong; see the command-4 comment).
         "0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
         "  0x00, 0x00, 0x00, 0x00,\n"
         "  0x1F, 0x00, 0x00, 0x00",
@@ -268,7 +282,7 @@ def test_sensor_config_retry_retries_the_whole_sequence():
     for name in ("RUNTIME_ENABLE_AIRWHEEL",
                  "RUNTIME_ENABLE_GESTURES",
                  "RUNTIME_ENABLE_DATA_OUTPUT",
-                 "RUNTIME_DISABLE_AUTO_CALIBRATION"):
+                 "RUNTIME_AUTO_CALIBRATION"):
         assert name in attempt, f"the attempt must queue {name}"
     # The retry keeps rescheduling itself until it succeeds — never gives
     # up, never stops.
@@ -883,8 +897,9 @@ def test_the_200hz_sensor_path_never_prints():
 
 def _trace_guarded_text():
     """The sketch text inside `#if SKYWRITER_EVENT_TRACE` ... `#endif`
-    regions (the gate is the only conditional-compilation block in the
-    sketch, so a simple #if/#endif stack resolves it)."""
+    regions (the event-trace gate and the P3.31 calibration variants are
+    the sketch's only conditional-compilation blocks; the #if/#endif
+    stack below resolves any balanced nesting)."""
     lines = sketch_source().splitlines()
     inside = []
     stack = []
@@ -1025,17 +1040,195 @@ def test_flash_script_can_enable_the_trace_for_acceptance_builds():
     """The acceptance-run build path: `SKYWRITER_EVENT_TRACE=1 ./flash.sh …`
     must forward the switch to the compiler as a `-D` definition (so an
     acceptance build never requires editing the sketch source), and the
-    default build must pass no such flag. (`--build-property
-    build.extra_flags=-D…` is the arduino-cli 1.x mechanism — this CLI
-    version has no --build-flags flag.)"""
+    default build must pass no such flag. (P3.31 revision of the
+    mechanism: the requested -D definitions now fold into ONE
+    `compiler.cpp.extra_flags` value carried in the positional parameters.
+    `build.extra_flags` turned out to be the BOARD'S OWN flag slot —
+    boards.txt gives the Pico W `-DPICO_CYW43_SUPPORTED=1` through it,
+    and overriding that slot compiles the core WITHOUT the WiFi driver
+    while arduino-cli caches the broken core archive per FQBN, killing
+    every later build of that FQBN — verified 2026-11-26. The
+    compiler-level slot adds our flags without touching the board's.)"""
     flash = (SKETCH.parents[1] / "flash.sh").read_text()
     assert "SKYWRITER_EVENT_TRACE" in flash, (
         "flash.sh must accept the SKYWRITER_EVENT_TRACE=1 build knob")
-    assert 'build.extra_flags=-DSKYWRITER_EVENT_TRACE=1' in flash, (
+    assert 'set -- "$@" -DSKYWRITER_EVENT_TRACE=1' in flash, (
         "the switch must reach the compiler as a -D definition")
-    # The default stays off: the knob reads with a `:-0` fallback and the
-    # build-property variable defaults to empty (no -D reaches the
-    # compiler in a normal build).
+    # The default stays off: the knob reads with a `:-0` fallback and no
+    # build property is passed unless at least one switch is set.
     assert "${SKYWRITER_EVENT_TRACE:-0}" in flash
-    assert 'BUILD_PROPERTY=""' in flash, (
+    assert 'if [ "$#" -gt 0 ]; then' in flash, (
         "the default build must pass no -D flag")
+
+
+# ------------------------------------- P3.31: auto-calibration semantics + experiment --
+# (Hardware session 6, findings F19/F23: the sensor's Clipping health bit
+# is set on EVERY frame ever captured, including the FIRST data frame of a
+# fresh boot, and the "auto-calibration is disabled" premise turned out
+# FALSE — Interface.pdf §4.4.5.3 (dspCalOpMode) says a bit CLEARED in
+# Argument0 ENABLES its auto-calibration feature and a bit SET DISABLES
+# it, with Argument1 as the mask, so the legacy payload both drivers send
+# (Argument0 = 0x00, mask 0x1F) actually ENABLES all five masked features.
+# The correction is comments-only; the genuine disable is a compile-time
+# EXPERIMENT variant so the default build's behaviour is unchanged.)
+
+def _cal_branches():
+    """The three branch texts of the calibration-variant block: the
+    `#if SKYWRITER_CAL_DISABLE` full-disable branch, the
+    `#elif SKYWRITER_CAL_DISABLE_IDLE` idle-only branch and the legacy
+    `#else` default. The payload block is the FIRST `#if
+    SKYWRITER_CAL_DISABLE` region in the sketch — the variant-NAME macro
+    below it reuses the same #if line, so the scan stops after the first
+    complete region (and asserts it found the payload, not the macro)."""
+    lines = sketch_source().splitlines()
+    branches = {}
+    current = None
+    buf = []
+    inside = False
+    for line in lines:
+        s = line.strip()
+        if not inside:
+            if s.startswith("#if SKYWRITER_CAL_DISABLE"):
+                inside = True
+                current, buf = "if", [line]
+            continue
+        if s.startswith("#elif SKYWRITER_CAL_DISABLE_IDLE"):
+            branches[current] = "\n".join(buf)
+            current, buf = "elif", [line]
+        elif s == "#else":
+            branches[current] = "\n".join(buf)
+            current, buf = "else", [line]
+        elif s == "#endif" and current is not None:
+            branches[current] = "\n".join(buf)
+            break  # the FIRST #if region is the payload block
+        else:
+            buf.append(line)
+    assert set(branches) == {"if", "elif", "else"}, (
+        "the calibration variant block must have exactly three branches")
+    assert "RUNTIME_AUTO_CALIBRATION" in branches["if"], (
+        "the first #if region must be the payload block, not the name macro")
+    return branches
+
+
+def test_calibration_comment_states_the_datasheet_semantics():
+    """P3.31: the command-4 label no longer claims a plain "Disable" — the
+    corrected comment states the datasheet's inverted bit semantics
+    (Interface.pdf §4.4.5.3, dspCalOpMode), names the five masked features
+    the legacy payload actually ENABLES, and notes the AFA bit outside
+    the mask."""
+    src = sketch_source()
+    assert "// 4. Disable auto-calibration" not in src, (
+        "the misleading command-4 label must be gone")
+    for token in ("§4.4.5.3", "dspCalOpMode", "CLEARED", "ENABLES",
+                  "DISABLES", "AFA"):
+        assert token in src, f"missing semantics token {token!r}"
+    for feature in ("start-up", "gesture-triggered", "negative",
+                    "idle", "invalidity-value"):
+        assert feature in src, f"missing feature name {feature!r}"
+
+
+def test_calibration_experiment_variants_are_gated_off_by_default():
+    """P3.31: the genuine-disable experiment is compile-time gated OFF —
+    a default build sends the legacy payload byte-for-byte (behaviour
+    unchanged), `-DSKYWRITER_CAL_DISABLE=1` swaps in the genuine disable
+    (Argument0 = 0x1F, mask = 0x1F — all five masked features off) and
+    `-DSKYWRITER_CAL_DISABLE_IDLE=1` the idle-only fallback (0x08/0x08).
+    The single array name keeps the queue wiring variant-independent."""
+    src = sketch_source()
+    for macro in ("SKYWRITER_CAL_DISABLE", "SKYWRITER_CAL_DISABLE_IDLE"):
+        ifndef_at = src.index(f"#ifndef {macro}")
+        define_at = src.index(f"#define {macro} 0")
+        assert ifndef_at < define_at, (
+            f"{macro} must default to 0 (an #ifndef fallback the build "
+            "flags can override)")
+    branches = _cal_branches()
+    legacy = ("0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
+              "  0x00, 0x00, 0x00, 0x00,\n"
+              "  0x1F, 0x00, 0x00, 0x00")
+    disable_all = ("0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
+                   "  0x1F, 0x00, 0x00, 0x00,\n"
+                   "  0x1F, 0x00, 0x00, 0x00")
+    disable_idle = ("0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
+                    "  0x08, 0x00, 0x00, 0x00,\n"
+                    "  0x08, 0x00, 0x00, 0x00")
+    assert legacy in branches["else"], (
+        "the default branch must keep the legacy payload byte-for-byte")
+    assert disable_all in branches["if"], (
+        "the full-disable branch must set every masked feature bit")
+    assert disable_idle in branches["elif"], (
+        "the idle-only branch must set only the idle-calibration bit")
+    # The three branches define ONE array name — the queue stays untouched
+    # whichever variant is compiled.
+    assert src.count("const unsigned char RUNTIME_AUTO_CALIBRATION[") == 3, (
+        "each branch must define the same single array name")
+    assert "    RUNTIME_AUTO_CALIBRATION," in src, (
+        "configure_sensor_attempt must queue the calibration command")
+
+
+def test_calibration_variant_is_named_on_the_serial_evidence():
+    """P3.31: the experiment's identity is on the serial console in every
+    capture mode — the `SKYSTATE sensor_ok` boot line AND the repeating
+    health line both name the active calibration variant (`cal=`), so a
+    monitor attached after boot (session 2's capture mode) still shows
+    which build runs."""
+    src = sketch_source()
+    for name in ("legacy_all_enabled", "disable_all", "disable_idle"):
+        assert f'"{name}"' in src, f"missing variant name {name!r}"
+    ok_body = function_body("sensor_config_report_success")
+    assert '" cal="' in ok_body, (
+        "the sensor_ok boot line must name the calibration variant")
+    assert "SKYWRITER_CAL_VARIANT_NAME" in ok_body
+    health = function_body("print_health_status")
+    assert '" cal="' in health and "SKYWRITER_CAL_VARIANT_NAME" in health, (
+        "the health line must repeat the variant (late-attached monitors)")
+    # The health-line token sits with the configuration fields it explains.
+    cfg_at = health.index("cfg_attempts=")
+    cal_at = health.index('" cal="')
+    polls_at = health.index('" polls="')
+    assert cfg_at < cal_at < polls_at, (
+        "cal= belongs with sensor_cfg/cfg_attempts, before the read counters")
+
+
+def test_flash_script_forwards_the_calibration_knobs():
+    """P3.31: flash.sh accepts both experiment knobs with off defaults,
+    and every requested -D definition reaches the compiler inside ONE
+    `compiler.cpp.extra_flags` value — the COMPILER-level slot, never the
+    board's own `build.extra_flags` slot (boards.txt gives the Pico W
+    `-DPICO_CYW43_SUPPORTED=1` through `build.extra_flags`; overriding it
+    compiles the core without the WiFi driver and arduino-cli caches the
+    broken core archive per FQBN — verified 2026-11-26 — while repeated
+    same-key --build-property values are last-one-wins, so the trace and
+    experiment switches must combine as one space-separated value passed
+    as exactly two arguments through the positional parameters)."""
+    flash = (SKETCH.parents[1] / "flash.sh").read_text()
+    for knob in ("SKYWRITER_EVENT_TRACE", "SKYWRITER_CAL_DISABLE",
+                 "SKYWRITER_CAL_DISABLE_IDLE"):
+        assert knob in flash, f"flash.sh must accept the {knob}=1 knob"
+        assert "${" + knob + ":-0}" in flash, (
+            f"{knob} must default off (:-0 fallback)")
+    # ONE build-property emission for every combination of switches: the
+    # fold line is the only place a property is passed to the compile.
+    assert ('set -- --build-property "compiler.cpp.extra_flags='
+            in flash), (
+        "all -D flags must fold into the single compiler.cpp.extra_flags "
+        "value — never the board's own build.extra_flags slot")
+    assert flash.count("set -- --build-property") == 1, (
+        "exactly one build-property emission for every switch combination")
+    # The board's own flag slot must not be touched anywhere: no
+    # build.extra_flags= value is ever passed (the comment may NAME the
+    # slot to explain why — it never assigns it).
+    assert "build.extra_flags=" not in flash, (
+        "the board's build.extra_flags slot must never be overridden")
+    # The value must survive as one argument: the compile passes the
+    # folded list through the positional parameters ("$@"), never through
+    # an unquoted variable that would re-split the value's spaces.
+    assert '"$@"' in flash, (
+        'the compile must pass the folded build property via "$@"')
+    # The idle fallback yields to the full disable when both are set.
+    full_at = flash.index('"${SKYWRITER_CAL_DISABLE:-0}"')
+    idle_line = 'elif [ "${SKYWRITER_CAL_DISABLE_IDLE:-0}" = "1" ]; then'
+    assert idle_line in flash and full_at < flash.index(idle_line), (
+        "SKYWRITER_CAL_DISABLE=1 must take precedence over the idle knob")
+    # The sketch-dir argument survives the positional scratch space.
+    assert 'cd "$SKETCH_DIR_ARG"' in flash or "SKETCH_DIR_ARG" in flash, (
+        "the sketch-dir argument must be saved before $@ is reused")
