@@ -647,6 +647,58 @@ docker run -it --rm \
     are all Phase 4 (hardware) or Phase 5 (gated on hardware), so this
     iteration wrote the `READY_FOR_HW` marker for the P4.0 acceptance
     run.
+    Update (2026-11-26, hardware session 6 — the P4.0 acceptance round
+    on the free-air bench, run by a person on the host; the round's
+    record is `HW_REPORT.md`, findings F19–F24). The acceptance
+    instruments delivered their verdict, and the sensor's own health
+    byte is now the case's centre of gravity:
+    - **The Clipping health bit is set on EVERY frame ever captured,
+      from the very first frame of a fresh boot (F19).** Meaning
+      datasheet-verified (Interface.pdf Table 4-10 bit 5: "the ADCs
+      are clipping" — the sensor's analog-to-digital receiver is
+      saturated); a healthy board at rest reads 0x80, this board has
+      never shown anything but 0xA0/0xB0, and PositionValid (bit 0)
+      has never been set in any frame on any build — the pointer
+      channel's input does not exist on this bench.
+    - **Supply eliminated (F21)**: 3.3 V measured at the sensor's own
+      pins after the free-air re-mount.
+    - **Mounting/environment eliminated (F20)**: the sensor isolated
+      ~6 cm from the veroboard on a non-conductive mat, wires running
+      away from the board — no change. Hover still produces zero
+      frames; close-hover motion decodes as touch only; the sensor's
+      own EnvironmentalNoise bit reads 0 during hover attempts, so the
+      sensor blames itself (clipping), not ambient noise.
+    - **Baseline-drift hypothesis (ii) REFUTED on two counts (F23)**:
+      the fresh boot's FIRST data frame (uptime ≤ 2 s, no hand near)
+      already carries clip=1 — there is no healthy period to drift
+      from — and the premise "auto-calibration is disabled" is FALSE:
+      re-reading the datasheet's calibration-command semantics
+      (§4.4.5.3 dspCalOpMode) shows the "disable auto-calibration"
+      payload both drivers send (Argument0 = 0x00, mask 0x1F)
+      actually ENABLES all five auto-calibration features (a bit
+      CLEARED in Argument0 enables the feature; only a bit SET
+      disables it) — the comment has been mislabelling the command
+      all along. Semantics correction + the genuine-disable experiment
+      opened as P3.31 (§3i).
+    - **First end-to-end acceptance PASSes (F22)**: north tap → Page
+      Up and south tap → Page Down reached the laptop — the serial
+      monitor's terminal displays the injected keystrokes as
+      ^[[5~/^[[6~ escape codes, direct evidence of the whole chain
+      (sensor → Pico decode → mapping → BLE keyboard report → host);
+      no letters typed anywhere (P3.21's fix holds on hardware). Zone
+      orientation CONFIRMED (centre/north/east/south all name the
+      right zone, all three families each, including the first north
+      doubletap code=2 capture). The west touches produced ONLY centre
+      codes — missed electrode or marginal zone, one deliberate rerun
+      pending. The fresh boot also verified P3.27 on hardware: exactly
+      one `ble_resync`/`ble_connected` pair per link, `conn=1`
+      throughout.
+    - **The Raspberry Pi cross-check is BLOCKED (F24)** — no Pi to
+      hand. It remains the decisive test between "damaged board" and
+      "Pico-side setup"; the P3.31 experiment is the last code-side
+      lever until one is available. The 2026-11-24 boot's four minutes
+      of working position (pos=83, pre-instrumentation) keeps a
+      boot-dependent intermittency alive as a possibility.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -775,6 +827,46 @@ acceptance session; evidence in P4.0's 2026-11-25 update)
 - [x] P3.29 → done, moved to the Done section below (commit `672e128`).
 - [x] P3.30 → done, moved to the Done section below (commit `1f901f7`).
 
+### 3i — Front-end saturation items (opened 2026-11-26 from hardware
+session 6's clipping evidence; see P4.0's session-6 update and the
+round's `HW_REPORT.md` F19–F24)
+
+- [ ] P3.31 **Auto-calibration semantics correction + genuine-disable
+      experiment build.** Two parts, one change:
+      1. **Correction (comments only, behaviour unchanged)**: both
+         drivers' "disable auto-calibration" comments are wrong about
+         the datasheet's bit semantics — Interface.pdf §4.4.5.3
+         (dspCalOpMode, runtime ID 0x80) says a bit CLEARED in
+         Argument0 ENABLES the feature and a bit SET DISABLES it, so
+         the payload both drivers send (Argument0 = 0x00, mask 0x1F)
+         actually ENABLES all five masked auto-calibration features
+         (start-up, gesture-triggered, negative, idle, invalidity-value
+         calibration; the AFA bit is outside the mask and stays at the
+         chip default). Fix the comments in
+         `library/skywriter/__init__.py` (the "Disable
+         auto-calibration" block at the setup payload) and
+         `pico-arduino/SkywriterController/SkywriterController.ino`
+         (command 4's label).
+      2. **Experiment build (compile-time gated, OFF by default)**: add
+         a sketch build flag that sends the GENUINE disable instead —
+         Argument0 = 0x1F, mask = 0x1F (all five features off). Why:
+         with supply (F21), mounting/environment (F20) and baseline
+         drift (F23) eliminated, the constant from-boot Clipping bit
+         (F19) leaves the auto-calibration suite as the one untested
+         vendor mechanism touching the analog operating point — idle
+         calibration continuously adjusts the electrode baselines, a
+         poisoned baseline rails the receiver, and the rail is exactly
+         what the Clipping bit reports. The 2026-11-24 boot's ~4 minutes
+         of working position (pos=83) fits start-up calibration good →
+         idle calibration poisoning it later. On hardware (next
+         reflash, forget + re-pair first): PASS = the health line's
+         `clip=` clears and hover produces position frames; FAIL with
+         clip=1 still set leaves the damaged-board hypothesis (the
+         blocked Raspberry Pi cross-check, F24). If the full disable
+         misbehaves, a second gated variant disabling ONLY idle
+         calibration (Argument0 bit 3 = 1, mask bit 3 = 1) narrows
+         which feature poisons the baseline.
+
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
 The container can *write* these files but only the host can *run* them. Each
@@ -899,6 +991,38 @@ item names what needs the Pico W plugged in.
       attempts so far never reached the recognizer (touch range → the
       touch recognizer took over; hover range → nothing was seen at
       all).
+      Acceptance round update (2026-11-26, session 6 + the free-air
+      bench — findings F19–F24, `HW_REPORT.md` holds the captures): the
+      diagnosis moved from "which detection envelope" to "why is the
+      front end saturated". Every frame ever captured on the
+      instrumented builds carries the sensor's own Clipping bit
+      (Interface.pdf Table 4-10 bit 5: "the ADCs are clipping"),
+      including the FIRST data frame of a fresh boot with no hand near
+      — so hypothesis (ii) (baseline drift with auto-calibration
+      disabled) is REFUTED (no healthy period to drift from, and the
+      "disabled" premise itself is false: the payload both drivers
+      send actually ENABLES all five auto-calibration features, see
+      P3.31), hypothesis (iii)'s mounting/environment branch is
+      ELIMINATED (free-air isolation on a non-conductive mat changed
+      nothing; the sensor's own noise bit reads 0 during hover
+      attempts), and the supply is verified 3.3 V at the sensor's own
+      pins (F21). What remains: hypothesis (h) — the front end
+      saturates from boot for a cause inside the board/host chain:
+      either the board is damaged (the Raspberry Pi cross-check
+      decides; BLOCKED — no Pi available, F24) or a
+      runtime-configuration interaction (the one untested vendor
+      mechanism is the auto-calibration suite, currently fully ON via
+      the mislabelled payload — P3.31's genuine-disable experiment is
+      the last code-side lever; it also fits the one working window,
+      2026-11-24's ~4 minutes of position, as start-up calibration
+      good → idle calibration poisoning it later). The 2026-11-24
+      boot keeps a boot-dependent intermittency alive as a
+      possibility. The touch channel, the zone map and the keyboard
+      rows are proven on hardware meanwhile (F22: Page Up/Down
+      end-to-end, orientation confirmed; west rerun pending). Next
+      hardware steps in `HW_REPORT.md`'s list: P3.31 experiment
+      build, west rerun, boot-intermittency probe, post-enclosure
+      recheck, the F24 cross-check when a Pi is available.
       Reported symptoms (session 1, Linux/BlueZ laptop): the cursor jumps or
       teleports; it moves the wrong way or along the wrong axis; keyboard and
       media keys fire. Clicks and scrolling were not listed as symptoms. The
