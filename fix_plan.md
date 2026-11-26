@@ -699,6 +699,83 @@ docker run -it --rm \
       lever until one is available. The 2026-11-24 boot's four minutes
       of working position (pos=83, pre-instrumentation) keeps a
       boot-dependent intermittency alive as a possibility.
+     Update (2026-11-26, loop iteration after HW_REPORT.md round 6 — code
+     commit): the round's record is consumed into this ledger and the file
+     is removed (PROMPT.md protocol: facts live here, the file exists only
+     between the hardware loop writing it and the inner loop consuming
+     it). No NEW failure came out of the round that was not already
+     recorded here — the code-fixable lever it named is exactly P3.31,
+     and it landed in the same change:
+     - **P3.31 (auto-calibration semantics correction + genuine-disable
+       experiment build) — DONE.** The semantics were re-verified
+       first-hand against Microchip's public MGC3030/3130 GestIC Library
+       Interface Description (DS40001718E §4.4.5.3) — a bit CLEARED in
+       Argument0 ENABLES its auto-calibration feature, a bit SET DISABLES
+       it, Argument1 is the mask — confirming the round's F23 reading
+       word for word (the repo's own `datasheets/Interface.pdf` is
+       DRM-encrypted and resists text extraction, so the public document
+       was the verification source). What landed: the corrected comments
+       in both drivers (the sketch's command-4 block, the Python driver's
+       setup payload comment + debug label, `library/test.py`'s
+       configuration comment) with behaviour UNCHANGED — the legacy
+       payload (Argument0 = 0x00, mask 0x1F) still sent byte-for-byte by
+       default; the compile-time experiment variants in the sketch —
+       `SKYWRITER_CAL_DISABLE=1` (Argument0 = 0x1F, mask = 0x1F, all
+       five masked features off) and `SKYWRITER_CAL_DISABLE_IDLE=1`
+       (bit 3 only, the fallback) — OFF by default, single array name so
+       the command queue is variant-independent; the serial evidence
+       names the variant (`cal=legacy_all_enabled` / `cal=disable_all` /
+       `cal=disable_idle`) on BOTH the `sensor_ok` boot line and the
+       repeating health line, so a late-attached monitor cannot mistake
+       the experiment build for the default; flash.sh forwards both knobs
+       and folds every requested -D into ONE `compiler.cpp.extra_flags`
+       value — a build-tool DISCOVERY along the way: `build.extra_flags`
+       is the BOARD'S OWN flag slot (boards.txt gives the Pico W
+       `-DPICO_CYW43_SUPPORTED=1` through it), and overriding it — the
+       mechanism P3.29's flash.sh used for the trace switch — compiles
+       the core WITHOUT the WiFi/Bluetooth driver while arduino-cli
+       caches the broken core archive per FQBN, after which EVERY build
+       of that FQBN fails with `undefined reference to init_cyw43_wifi`
+       until `~/.cache/arduino/cores/<fqbn…>` is deleted (verified
+       empirically in this container: a fresh cache + the old mechanism
+       = guaranteed broken core; the host had survived latently because
+       its core cache was built by a property-free build first — the
+       standing gotcha is now in AGENTS.md, and repeated same-key
+       `--build-property` values are last-one-wins, so combined switches
+       must share ONE value); run_tests.sh now ALSO compiles both
+       experiment variants through the corrected slot (their `#if`
+       branches are otherwise never compiled anywhere); the binary
+       verification: default build = `legacy_all_enabled` and zero
+       SKYTRACE strings, full-disable+trace build = `disable_all` plus
+       all four SKYTRACE line formats at exactly +536 bytes (matching
+       P3.29's recorded trace overhead), idle build = `disable_idle`;
+       `specs/ble_hid.md` §6 gained the P3.31 implementation note (and
+       its P3.29 note's mechanism phrase was corrected with it). One
+       datasheet detail recorded in the sketch comment and the spec: the
+       vendor's own Appendix A "Disable" fixed command uses
+       Argument0 = 0x3F, mask = 0x3F — SIX bits, also disabling bit 5
+       (calibration triggered by AFA, the adaptive filter) — while the
+       experiment deliberately changes only the five bits the legacy
+       command already masked (one variable at a time; the 0x3F variant
+       is the third rung of the experiment ladder if 0x1F is
+       inconclusive).
+     - On hardware (the experiment, next reflash; remember the standing
+       re-pair-after-reflash caveat): flash
+       `SKYWRITER_EVENT_TRACE=1 SKYWRITER_CAL_DISABLE=1
+       ./pico-arduino/flash.sh pico-arduino/SkywriterController`,
+       forget + re-pair on the laptop, confirm the boot line says
+       `cal=disable_all`, then run the palm hover and clip watch. PASS =
+       the health line's `clip=` clears and hover produces position
+       frames (`events pos` + `hid pointer` climbing). FAIL = `clip=1`
+       still set on every frame → flash the idle-only variant
+       (`SKYWRITER_CAL_DISABLE_IDLE=1`, `cal=disable_idle`) to narrow
+       which feature poisons the baseline; still clip=1 on both → the
+       vendor-canonical 0x3F variant (including AFA) is the last
+       code-side rung, after which the damaged-board hypothesis and the
+       blocked Raspberry Pi cross-check (F24) are all that remain. The
+       round's other next steps (west-zone rerun, boot-intermittency
+       probe, post-enclosure recheck, the F24 cross-check when a Pi is
+       available) stay hardware-side, in P4.0's list.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -831,41 +908,7 @@ acceptance session; evidence in P4.0's 2026-11-25 update)
 session 6's clipping evidence; see P4.0's session-6 update and the
 round's `HW_REPORT.md` F19–F24)
 
-- [ ] P3.31 **Auto-calibration semantics correction + genuine-disable
-      experiment build.** Two parts, one change:
-      1. **Correction (comments only, behaviour unchanged)**: both
-         drivers' "disable auto-calibration" comments are wrong about
-         the datasheet's bit semantics — Interface.pdf §4.4.5.3
-         (dspCalOpMode, runtime ID 0x80) says a bit CLEARED in
-         Argument0 ENABLES the feature and a bit SET DISABLES it, so
-         the payload both drivers send (Argument0 = 0x00, mask 0x1F)
-         actually ENABLES all five masked auto-calibration features
-         (start-up, gesture-triggered, negative, idle, invalidity-value
-         calibration; the AFA bit is outside the mask and stays at the
-         chip default). Fix the comments in
-         `library/skywriter/__init__.py` (the "Disable
-         auto-calibration" block at the setup payload) and
-         `pico-arduino/SkywriterController/SkywriterController.ino`
-         (command 4's label).
-      2. **Experiment build (compile-time gated, OFF by default)**: add
-         a sketch build flag that sends the GENUINE disable instead —
-         Argument0 = 0x1F, mask = 0x1F (all five features off). Why:
-         with supply (F21), mounting/environment (F20) and baseline
-         drift (F23) eliminated, the constant from-boot Clipping bit
-         (F19) leaves the auto-calibration suite as the one untested
-         vendor mechanism touching the analog operating point — idle
-         calibration continuously adjusts the electrode baselines, a
-         poisoned baseline rails the receiver, and the rail is exactly
-         what the Clipping bit reports. The 2026-11-24 boot's ~4 minutes
-         of working position (pos=83) fits start-up calibration good →
-         idle calibration poisoning it later. On hardware (next
-         reflash, forget + re-pair first): PASS = the health line's
-         `clip=` clears and hover produces position frames; FAIL with
-         clip=1 still set leaves the damaged-board hypothesis (the
-         blocked Raspberry Pi cross-check, F24). If the full disable
-         misbehaves, a second gated variant disabling ONLY idle
-         calibration (Argument0 bit 3 = 1, mask bit 3 = 1) narrows
-         which feature poisons the baseline.
+- [x] P3.31 → done, moved to the Done section below.
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -1361,6 +1404,98 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.31 — the auto-calibration label told the truth at last, and the
+  genuine disable became a build you can flash (code commit `baecc63`;
+  this ledger commit follows). In plain language: every build this
+  project has ever flashed left the sensor's five automatic
+  self-tuning features switched ON, while the code comment claimed it
+  was switching them OFF — the sensor's own health report (the Clipping
+  bit, set on every frame from the first frame of a fresh boot, hardware
+  session 6's F19) pointed at exactly that suite, and the datasheet
+  says the comment had the bit meanings BACKWARDS: a 0 bit means
+  "feature on", a 1 bit means "feature off", and a separate mask byte
+  picks which bits the command touches. Two parts landed:
+  - **Correction, comments only** (nothing a user or a test could observe
+    changes): the fourth sensor-configuration command's label in the
+    Pico W firmware sketch, the Raspberry Pi Python driver's setup
+    comment and its debug print, and the library smoke test's comment
+    now all state the real semantics — the legacy payload (the
+    feature-bits byte 0x00, mask 0x1F) ENABLES all five masked features
+    (start-up, gesture-triggered, negative, idle, invalidity-value
+    calibration; the sixth bit, AFA-triggered calibration, sits outside
+    the mask and keeps the chip default) — verified first-hand against
+    Microchip's public interface document DS40001718E §4.4.5.3 (the
+    repo's own datasheet PDF is copy-protected against text extraction,
+    so the public document was the source; it matches the hardware
+    round's reading word for word).
+  - **The experiment build, compile-time gated, OFF by default**: the
+    default firmware still sends the legacy bytes (so no existing
+    behaviour or recorded expectation changes), but two new build
+    switches give the hardware loop the real levers —
+    `SKYWRITER_CAL_DISABLE=1` sends the GENUINE disable (feature bits
+    0x1F, mask 0x1F — all five off) and `SKYWRITER_CAL_DISABLE_IDLE=1`
+    the idle-only fallback (bit 3) that narrows which feature poisons
+    the baseline if the full disable misbehaves. The serial console now
+    names the active variant on both the `SKYSTATE sensor_ok` boot line
+    and the every-2-seconds health line (`cal=legacy_all_enabled` /
+    `cal=disable_all` / `cal=disable_idle`) — a capture can never
+    mistake the experiment build for the default, even when the monitor
+    attaches after boot (session 2's capture mode). flash.sh forwards
+    both switches, and TWO build-tool quirks were found and handled on
+    the way: the Arduino build tool takes two `--build-property` values
+    for the same key as "last one wins" (verified with a two-macro test
+    sketch), so all requested `-D` switches fold into ONE
+    space-separated value carried through the shell's positional
+    parameters — and the value must go into
+    `compiler.cpp.extra_flags`, NOT the `build.extra_flags` key that
+    P3.29's flash.sh used, because `build.extra_flags` is the board's
+    OWN flag slot (`boards.txt` gives the Pico W
+    `-DPICO_CYW43_SUPPORTED=1` through it): overriding it compiles the
+    core WITHOUT the WiFi/Bluetooth driver, and the Arduino build tool
+    caches that broken core archive per board definition — after which
+    EVERY build of that board definition fails with `undefined
+    reference to init_cyw43_wifi` until the cache entry under
+    `~/.cache/arduino/cores/` is deleted. This iteration's first
+    compile hit exactly that trap (a fresh container cache + the old
+    mechanism = a guaranteed broken core; past sessions on the host had
+    survived latently because the host's core cache was first built by a
+    property-free flash), so flash.sh and run_tests.sh now use the
+    compiler-level slot, the corrected mechanism is pinned by tests and
+    recorded in `specs/ble_hid.md` and a standing AGENTS.md gotcha, and
+    the binary verification confirms all three builds: default =
+    `legacy_all_enabled` with zero SKYTRACE strings, full-disable +
+    trace = `disable_all` plus all four SKYTRACE line formats at
+    exactly +536 bytes (matching P3.29's recorded trace overhead),
+    idle-only = `disable_idle`. `run_tests.sh` now compiles BOTH
+    experiment variants in every run (their `#if` branches would
+    otherwise never be compiled anywhere).
+  - Test-first discipline held: 4 new sketch pins (the datasheet
+    semantics in the corrected comment; the two gated variants with
+    their exact bytes, the off-by-default `#ifndef` gates and the single
+    shared array name; the `cal=` tokens on both serial lines;
+    flash.sh's knobs, the single-value fold into the compiler slot, the
+    knob precedence and the saved sketch-dir argument) plus the
+    renamed-array pins and the rewritten flash.sh mechanism pin updated
+    in place, and 3 new Python-driver pins
+    (tests/test_driver_calibration_semantics.py: the corrected comment
+    tokens, the misleading label gone, and the legacy payload
+    byte-for-byte unchanged) — all new pins verified FAILING against
+    the pre-change code first. 159 pytest tests total;
+    `bash run_tests.sh` green 4/4 with the two extra experiment
+    compiles folded into the firmware-compile check.
+  - On hardware (the experiment ladder, next reflash; forget + re-pair
+    on the laptop first — the standing reflash caveat): flash the
+    acceptance experiment build, confirm `cal=disable_all` on the boot
+    line, then the palm-hover and clip watch. PASS = the health line's
+    `clip=` clears and hover produces position frames. FAIL with
+    `clip=1` still set → the idle-only variant
+    (`cal=disable_idle`); still `clip=1` → the vendor's own canonical
+    disable (also clearing the sixth AFA bit — Argument0/mask 0x3F,
+    the vendor's Appendix A "Disable" fixed command) is the third rung,
+    currently NOT wired as a switch on purpose (one variable at a
+    time); open it as a new item if both first rungs fail. After that,
+    the remaining hypotheses are the damaged board and the blocked
+    Raspberry Pi cross-check (F24).
 - P3.30 — the Raspberry Pi Python driver surfaces the sensor's own
   health byte (commit `1f901f7`). In plain language: every data frame
   the sensor sends carries a one-byte status report (SystemInfo,
