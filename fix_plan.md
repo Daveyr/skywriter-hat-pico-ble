@@ -835,6 +835,31 @@ docker run -it --rm \
      hardware-side (P4.0 and its probes), so this iteration writes the
      `READY_FOR_HW` marker with the 0x3F experiment as the next round's
      first test.
+     Update (2026-11-28, loop iteration 2 — independent verification
+     and a loop-harness hazard observation; no product-code change).
+     The iteration that landed P3.32 was interrupted mid-protocol and
+     auto-snapshotted by the loop, then RESUMED by its pending
+     background notification while iteration 2 was already running —
+     and it finished the whole protocol concurrently: it reset the
+     automatic-snapshot commit away, committed the code properly as
+     `7196712`, closed the ledger as `b79baf3` (the P3.32 Done entry
+     plus the update above), removed `HW_REPORT.md` and wrote the
+     `READY_FOR_HW` marker. Iteration 2 deliberately kept read-only
+     until that writer finished, then independently verified the
+     outcome: `bash run_tests.sh` green 4/4 (160 pytest tests; every
+     Pico W compile job green — the controller's default build plus
+     its three experiment variants, and all three example sketches);
+     the discarded snapshot commit's code content is byte-identical to
+     what `7196712` committed (only the ledger entry and the report
+     removal differ, so the verification ran against exactly the code
+     that landed); the P3.32 Done entry and the marker's T1–T4 test
+     list match the report's own next steps; the working tree is
+     clean. The overlap itself is a real hazard of the loop's
+     architecture (two writers, one tree — nothing collided only
+     because iteration 2 happened to be read-only at that moment):
+     opened as W9 in Phase 2 below, with its fix sketch and the
+     safe-moment constraint (never edit `ralph.sh` while a loop run
+     is live).
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -887,6 +912,39 @@ docker run -it --rm \
       bash ralph.sh` — confirm the agent commits, logs land in `logs/`, marker
       files stop the loop. Fix any friction found.
 - [x] W8 → done, moved to the Done section below.
+- [ ] W9 **Guard against overlapping loop iterations** (opened
+      2026-11-28 by loop iteration 2 — an OBSERVED hazard, not a
+      hypothesis; see the status snapshot's iteration-2 update).
+      What happened: the iteration that landed P3.32 had its turn end
+      mid-protocol with (evidently) a pending background notification;
+      `ralph.sh` treated the turn end as iteration completion —
+      automatic-snapshot commit, next iteration launched — and the
+      pending notification later RESUMED that session, which then
+      finished its whole protocol (reset of the snapshot commit, code
+      commit `7196712`, ledger commit `b79baf3`, `HW_REPORT.md`
+      removal, marker write) WHILE iteration 2 was already running
+      against the same working tree. Nothing collided only because
+      iteration 2 was read-only at that moment; an iteration
+      following its protocol normally (take the first open item,
+      edit `fix_plan.md`) would have collided with the resumed
+      writer. The guard, when landed:
+      - `PROMPT.md` Rules addition (SAFE to edit at any time — each
+        iteration reads the file fresh at launch): (a) never end the
+        turn while a background command is pending — run long
+        verifications in the foreground and wait for them; (b)
+        re-check `git log --oneline -3` and `git status` immediately
+        before ANY edit to the shared files (`fix_plan.md`,
+        `HW_REPORT.md` consumption, the marker files) and adopt
+        whatever state is found — a previously interrupted iteration
+        may be completing concurrently.
+      - `ralph.sh` comment note recommending a short grace wait
+        after `opencode run` exits before snapshotting: OPERATOR
+        work, never loop work — NEVER edit `ralph.sh` while a loop
+        run is live (bash re-reads scripts incrementally; a mid-run
+        edit can corrupt the running loop). Land it between runs.
+      Picked up by the next inner-loop run: the hardware round
+      writes `HW_REPORT.md`, `ralph.sh` clears the marker on its next
+      start, and W9 is then the first open software item.
 
 ## Phase 3 — Implementation (order is deliberate: test harness first)
 
