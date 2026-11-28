@@ -1073,13 +1073,15 @@ def test_flash_script_can_enable_the_trace_for_acceptance_builds():
 # EXPERIMENT variant so the default build's behaviour is unchanged.)
 
 def _cal_branches():
-    """The three branch texts of the calibration-variant block: the
+    """The four branch texts of the calibration-variant block: the
     `#if SKYWRITER_CAL_DISABLE` full-disable branch, the
-    `#elif SKYWRITER_CAL_DISABLE_IDLE` idle-only branch and the legacy
-    `#else` default. The payload block is the FIRST `#if
-    SKYWRITER_CAL_DISABLE` region in the sketch — the variant-NAME macro
-    below it reuses the same #if line, so the scan stops after the first
-    complete region (and asserts it found the payload, not the macro)."""
+    `#elif SKYWRITER_CAL_DISABLE_IDLE` idle-only branch, the
+    `#elif SKYWRITER_CAL_DISABLE_AFA` vendor-canonical branch (P3.32,
+    the experiment ladder's third rung) and the legacy `#else` default.
+    The payload block is the FIRST `#if SKYWRITER_CAL_DISABLE` region
+    in the sketch — the variant-NAME macro below it reuses the same #if
+    line, so the scan stops after the first complete region (and
+    asserts it found the payload, not the macro)."""
     lines = sketch_source().splitlines()
     branches = {}
     current = None
@@ -1094,7 +1096,10 @@ def _cal_branches():
             continue
         if s.startswith("#elif SKYWRITER_CAL_DISABLE_IDLE"):
             branches[current] = "\n".join(buf)
-            current, buf = "elif", [line]
+            current, buf = "elif_idle", [line]
+        elif s.startswith("#elif SKYWRITER_CAL_DISABLE_AFA"):
+            branches[current] = "\n".join(buf)
+            current, buf = "elif_afa", [line]
         elif s == "#else":
             branches[current] = "\n".join(buf)
             current, buf = "else", [line]
@@ -1103,8 +1108,8 @@ def _cal_branches():
             break  # the FIRST #if region is the payload block
         else:
             buf.append(line)
-    assert set(branches) == {"if", "elif", "else"}, (
-        "the calibration variant block must have exactly three branches")
+    assert set(branches) == {"if", "elif_idle", "elif_afa", "else"}, (
+        "the calibration variant block must have exactly four branches")
     assert "RUNTIME_AUTO_CALIBRATION" in branches["if"], (
         "the first #if region must be the payload block, not the name macro")
     return branches
@@ -1128,14 +1133,25 @@ def test_calibration_comment_states_the_datasheet_semantics():
 
 
 def test_calibration_experiment_variants_are_gated_off_by_default():
-    """P3.31: the genuine-disable experiment is compile-time gated OFF —
-    a default build sends the legacy payload byte-for-byte (behaviour
-    unchanged), `-DSKYWRITER_CAL_DISABLE=1` swaps in the genuine disable
-    (Argument0 = 0x1F, mask = 0x1F — all five masked features off) and
-    `-DSKYWRITER_CAL_DISABLE_IDLE=1` the idle-only fallback (0x08/0x08).
-    The single array name keeps the queue wiring variant-independent."""
+    """P3.31/P3.32: the genuine-disable experiment is compile-time gated
+    OFF — a default build sends the legacy payload byte-for-byte
+    (behaviour unchanged), `-DSKYWRITER_CAL_DISABLE=1` swaps in the
+    genuine disable (Argument0 = 0x1F, mask = 0x1F — all five masked
+    features off) and `-DSKYWRITER_CAL_DISABLE_IDLE=1` the idle-only
+    fallback (0x08/0x08). P3.32 adds the ladder's third rung after
+    hardware round 7 (findings F25–F28) measured BOTH first rungs
+    FAILING — the Clipping health bit still set on the first data
+    frame of a fresh boot with the genuine disable running, so
+    auto-calibration is eliminated as the boot-time saturation cause —
+    `-DSKYWRITER_CAL_DISABLE_AFA=1` sends the vendor's own canonical
+    disable (Argument0 = 0x3F, mask = 0x3F, six bits: the five masked
+    features plus bit 5, calibration triggered by AFA — the adaptive
+    filter; the vendor's Appendix A "Disable" fixed command): the last
+    untested combination. The single array name keeps the queue wiring
+    variant-independent."""
     src = sketch_source()
-    for macro in ("SKYWRITER_CAL_DISABLE", "SKYWRITER_CAL_DISABLE_IDLE"):
+    for macro in ("SKYWRITER_CAL_DISABLE", "SKYWRITER_CAL_DISABLE_IDLE",
+                  "SKYWRITER_CAL_DISABLE_AFA"):
         ifndef_at = src.index(f"#ifndef {macro}")
         define_at = src.index(f"#define {macro} 0")
         assert ifndef_at < define_at, (
@@ -1151,28 +1167,48 @@ def test_calibration_experiment_variants_are_gated_off_by_default():
     disable_idle = ("0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
                     "  0x08, 0x00, 0x00, 0x00,\n"
                     "  0x08, 0x00, 0x00, 0x00")
+    disable_afa = ("0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,\n"
+                   "  0x3F, 0x00, 0x00, 0x00,\n"
+                   "  0x3F, 0x00, 0x00, 0x00")
     assert legacy in branches["else"], (
         "the default branch must keep the legacy payload byte-for-byte")
     assert disable_all in branches["if"], (
         "the full-disable branch must set every masked feature bit")
-    assert disable_idle in branches["elif"], (
+    assert disable_idle in branches["elif_idle"], (
         "the idle-only branch must set only the idle-calibration bit")
-    # The three branches define ONE array name — the queue stays untouched
+    assert disable_afa in branches["elif_afa"], (
+        "the vendor-canonical branch must set all SIX bits (0x3F/0x3F — "
+        "the five masked features plus the AFA bit)")
+    # The four branches define ONE array name — the queue stays untouched
     # whichever variant is compiled.
-    assert src.count("const unsigned char RUNTIME_AUTO_CALIBRATION[") == 3, (
+    assert src.count("const unsigned char RUNTIME_AUTO_CALIBRATION[") == 4, (
         "each branch must define the same single array name")
     assert "    RUNTIME_AUTO_CALIBRATION," in src, (
         "configure_sensor_attempt must queue the calibration command")
+    # The preprocessor chain fixes the knob precedence: full disable
+    # before idle before the vendor-canonical rung (flash.sh forwards
+    # only one -D for the same reason — one variable at a time).
+    chain = [
+        src.index("#if SKYWRITER_CAL_DISABLE\n"),
+        src.index("#elif SKYWRITER_CAL_DISABLE_IDLE\n"),
+        src.index("#elif SKYWRITER_CAL_DISABLE_AFA\n"),
+    ]
+    assert chain == sorted(chain), (
+        "the variant chain must run full disable → idle → AFA "
+        "(the earliest knob set wins)")
 
 
 def test_calibration_variant_is_named_on_the_serial_evidence():
-    """P3.31: the experiment's identity is on the serial console in every
-    capture mode — the `SKYSTATE sensor_ok` boot line AND the repeating
-    health line both name the active calibration variant (`cal=`), so a
-    monitor attached after boot (session 2's capture mode) still shows
-    which build runs."""
+    """P3.31/P3.32: the experiment's identity is on the serial console
+    in every capture mode — the `SKYSTATE sensor_ok` boot line AND the
+    repeating health line both name the active calibration variant
+    (`cal=`), so a monitor attached after boot (session 2's capture
+    mode) still shows which build runs. Four names now exist: the
+    default, the two P3.31 rungs and the P3.32 vendor-canonical rung
+    (`disable_afa`)."""
     src = sketch_source()
-    for name in ("legacy_all_enabled", "disable_all", "disable_idle"):
+    for name in ("legacy_all_enabled", "disable_all", "disable_idle",
+                 "disable_afa"):
         assert f'"{name}"' in src, f"missing variant name {name!r}"
     ok_body = function_body("sensor_config_report_success")
     assert '" cal="' in ok_body, (
@@ -1190,19 +1226,22 @@ def test_calibration_variant_is_named_on_the_serial_evidence():
 
 
 def test_flash_script_forwards_the_calibration_knobs():
-    """P3.31: flash.sh accepts both experiment knobs with off defaults,
-    and every requested -D definition reaches the compiler inside ONE
-    `compiler.cpp.extra_flags` value — the COMPILER-level slot, never the
-    board's own `build.extra_flags` slot (boards.txt gives the Pico W
-    `-DPICO_CYW43_SUPPORTED=1` through `build.extra_flags`; overriding it
-    compiles the core without the WiFi driver and arduino-cli caches the
-    broken core archive per FQBN — verified 2026-11-26 — while repeated
-    same-key --build-property values are last-one-wins, so the trace and
+    """P3.31/P3.32: flash.sh accepts all three experiment knobs with off
+    defaults, and every requested -D definition reaches the compiler
+    inside ONE `compiler.cpp.extra_flags` value — the COMPILER-level
+    slot, never the board's own `build.extra_flags` slot (boards.txt
+    gives the Pico W `-DPICO_CYW43_SUPPORTED=1` through
+    `build.extra_flags`; overriding it compiles the core without the
+    WiFi driver and arduino-cli caches the broken core archive per
+    FQBN — verified 2026-11-26 — while repeated same-key
+    --build-property values are last-one-wins, so the trace and
     experiment switches must combine as one space-separated value passed
-    as exactly two arguments through the positional parameters)."""
+    as exactly two arguments through the positional parameters). The
+    knobs yield to the earliest rung when more than one is set (one
+    variable at a time — the experiment ladder's rule)."""
     flash = (SKETCH.parents[1] / "flash.sh").read_text()
     for knob in ("SKYWRITER_EVENT_TRACE", "SKYWRITER_CAL_DISABLE",
-                 "SKYWRITER_CAL_DISABLE_IDLE"):
+                 "SKYWRITER_CAL_DISABLE_IDLE", "SKYWRITER_CAL_DISABLE_AFA"):
         assert knob in flash, f"flash.sh must accept the {knob}=1 knob"
         assert "${" + knob + ":-0}" in flash, (
             f"{knob} must default off (:-0 fallback)")
@@ -1224,11 +1263,29 @@ def test_flash_script_forwards_the_calibration_knobs():
     # an unquoted variable that would re-split the value's spaces.
     assert '"$@"' in flash, (
         'the compile must pass the folded build property via "$@"')
-    # The idle fallback yields to the full disable when both are set.
+    # The rungs yield to the earlier knobs when more than one is set:
+    # full disable before idle before the vendor-canonical AFA rung.
     full_at = flash.index('"${SKYWRITER_CAL_DISABLE:-0}"')
     idle_line = 'elif [ "${SKYWRITER_CAL_DISABLE_IDLE:-0}" = "1" ]; then'
+    afa_line = 'elif [ "${SKYWRITER_CAL_DISABLE_AFA:-0}" = "1" ]; then'
     assert idle_line in flash and full_at < flash.index(idle_line), (
         "SKYWRITER_CAL_DISABLE=1 must take precedence over the idle knob")
+    assert afa_line in flash and flash.index(idle_line) < flash.index(afa_line), (
+        "the AFA knob is the ladder's third rung — it yields to both "
+        "earlier knobs")
     # The sketch-dir argument survives the positional scratch space.
     assert 'cd "$SKETCH_DIR_ARG"' in flash or "SKETCH_DIR_ARG" in flash, (
         "the sketch-dir argument must be saved before $@ is reused")
+
+
+def test_calibration_comment_records_the_hardware_rung_verdicts():
+    """P3.32: the command-4 comment records hardware round 7's outcome
+    (findings F25–F28) so a future reader knows why the third variant
+    exists and what its FAIL would mean: BOTH first rungs FAILED on the
+    bench (the Clipping bit still set on the first data frame of a
+    fresh boot with the genuine disable running), auto-calibration is
+    ELIMINATED as the boot-time receiver-saturation cause, and the
+    vendor-canonical 0x3F rung is the last untested combination."""
+    src = sketch_source()
+    for token in ("F25", "ELIMINATED", "0x3F", "Appendix A"):
+        assert token in src, f"missing round-7 verdict token {token!r}"

@@ -68,7 +68,17 @@
     serial capture can never mistake the experiment build for the
     default. Its hardware judgement: PASS = the health line's `clip=`
     clears and hover produces position frames (the 2026-11-26 clipping
-    investigation's next lever).
+    investigation's next lever). And since fix item P3.32 — hardware
+    round 7 (2026-11-28, findings F25–F28) measured BOTH of those
+    rungs FAILING (the Clipping health bit was still set on the FIRST
+    data frame of a fresh boot with the genuine disable running, so
+    auto-calibration is ELIMINATED as the receiver-saturation cause) —
+    the ladder gained its third rung: SKYWRITER_CAL_DISABLE_AFA=1 sends
+    the vendor's own canonical disable (Argument0 = 0x3F, mask = 0x3F —
+    six bits: the five masked features plus bit 5, calibration triggered
+    by AFA, the adaptive filter), named cal=disable_afa on the serial
+    lines. Its FAIL would exhaust the code-side ladder and leave the
+    damaged-board hypothesis (the blocked Raspberry Pi cross-check).
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -229,7 +239,7 @@ static const unsigned char RUNTIME_ENABLE_DATA_OUTPUT[SW_SET_RUNTIME_PAYLOAD_SIZ
 //    outside the 0x1F mask and keeps the chip default). Auto-calibration
 //    has been fully ON in every build so far.
 //
-//    Why that now matters (hardware session 6, findings F19/F23): the
+//    Why that mattered (hardware session 6, findings F19/F23): the
 //    sensor's own Clipping health bit (SystemInfo bit 5, "the ADCs are
 //    clipping" — the analog-to-digital receiver is saturated) has been
 //    set on EVERY frame ever captured, including the FIRST data frame of
@@ -239,10 +249,25 @@ static const unsigned char RUNTIME_ENABLE_DATA_OUTPUT[SW_SET_RUNTIME_PAYLOAD_SIZ
 //    is exactly what the Clipping bit reports. The one working window
 //    (2026-11-24, ~4 minutes of position) fits start-up calibration good
 //    → idle calibration poisoning it later. The auto-calibration suite
-//    is the one untested vendor mechanism left touching the analog
-//    operating point.
+//    was the one vendor mechanism still untested against that evidence.
 //
-//    Experiment variants (compile-time gated, both OFF by default — the
+//    VERDICT (hardware round 7, 2026-11-28, findings F25–F28): the
+//    first two rungs FAILED on the bench. With the genuine disable
+//    running (cal=disable_all named on the boot line) the fresh boot's
+//    FIRST data frame still reported sysinfo=0xA0 clip=1, and the 41
+//    frames of the slow palm descent (touch/gesture only, position
+//    still zero) carried clip=1 too; the idle-only rung showed the
+//    same first-frame verdict (its own hover produced zero frames —
+//    one trial, and the FAIL criterion is the boot frame either way).
+//    Auto-calibration — any single masked feature or the whole suite —
+//    is ELIMINATED as the cause of the boot-time receiver saturation:
+//    the Clipping bit is present before any calibration feature could
+//    run. The vendor-canonical rung below is the last untested
+//    combination; if it also fails, the code-side ladder is EXHAUSTED
+//    and what remains is the damaged-board hypothesis (the blocked
+//    Raspberry Pi cross-check, F24).
+//
+//    Experiment variants (compile-time gated, all OFF by default — the
 //    default build keeps the legacy payload byte-for-byte, behaviour
 //    unchanged):
 //      SKYWRITER_CAL_DISABLE=1       the GENUINE disable: Argument0 =
@@ -259,20 +284,36 @@ static const unsigned char RUNTIME_ENABLE_DATA_OUTPUT[SW_SET_RUNTIME_PAYLOAD_SIZ
 //                                   narrows which feature poisons the
 //                                   baseline if the full disable
 //                                   misbehaves.
-//    flash.sh forwards either knob (they combine with
-//    SKYWRITER_EVENT_TRACE=1 for the acceptance instrument), and the
+//      SKYWRITER_CAL_DISABLE_AFA=1   the vendor-canonical rung (P3.32,
+//                                   opened by round 7's two FAILs): the
+//                                   vendor's own Appendix A "Disable"
+//                                   fixed command — Argument0 = 0x3F,
+//                                   mask = 0x3F, SIX bits: the five
+//                                   masked features PLUS bit 5
+//                                   (calibration triggered by AFA, the
+//                                   adaptive filter). The last untested
+//                                   combination.
+//    flash.sh forwards any ONE of the three knobs (setting more than
+//    one yields to the earliest rung), they combine with
+//    SKYWRITER_EVENT_TRACE=1 for the acceptance instrument, and the
 //    serial console names the active variant (`cal=` on the sensor_ok
 //    and health lines) so a capture can never mistake the experiment
 //    build for the default. Hardware judgement (next reflash, forget +
 //    re-pair first): PASS = the health line's clip= clears and hover
-//    produces position frames; FAIL = clip=1 still set, which leaves the
-//    damaged-board hypothesis (the blocked Raspberry Pi cross-check).
+//    produces position frames; FAIL = clip=1 still set — with the first
+//    two rungs already measured FAILING, a third FAIL exhausts the
+//    code-side ladder and leaves the damaged-board hypothesis (the
+//    blocked Raspberry Pi cross-check).
 #ifndef SKYWRITER_CAL_DISABLE
 #define SKYWRITER_CAL_DISABLE 0
 #endif
 
 #ifndef SKYWRITER_CAL_DISABLE_IDLE
 #define SKYWRITER_CAL_DISABLE_IDLE 0
+#endif
+
+#ifndef SKYWRITER_CAL_DISABLE_AFA
+#define SKYWRITER_CAL_DISABLE_AFA 0
 #endif
 
 #if SKYWRITER_CAL_DISABLE
@@ -287,6 +328,14 @@ static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE]
   0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,
   0x08, 0x00, 0x00, 0x00,
   0x08, 0x00, 0x00, 0x00 };
+#elif SKYWRITER_CAL_DISABLE_AFA
+// The vendor-canonical rung (P3.32): the vendor's own Appendix A
+// "Disable" fixed command — SIX bits: the five masked features PLUS
+// bit 5 (calibration triggered by AFA, the adaptive filter).
+static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE] = {
+  0x00, 0x00, 0xA2,   0x80, 0x00,   0x00, 0x00,
+  0x3F, 0x00, 0x00, 0x00,
+  0x3F, 0x00, 0x00, 0x00 };
 #else
 // The legacy payload (the Python driver's historical bytes — actually
 // ENABLES all five masked features; behaviour deliberately unchanged).
@@ -304,6 +353,8 @@ static const unsigned char RUNTIME_AUTO_CALIBRATION[SW_SET_RUNTIME_PAYLOAD_SIZE]
 #define SKYWRITER_CAL_VARIANT_NAME "disable_all"
 #elif SKYWRITER_CAL_DISABLE_IDLE
 #define SKYWRITER_CAL_VARIANT_NAME "disable_idle"
+#elif SKYWRITER_CAL_DISABLE_AFA
+#define SKYWRITER_CAL_VARIANT_NAME "disable_afa"
 #else
 #define SKYWRITER_CAL_VARIANT_NAME "legacy_all_enabled"
 #endif

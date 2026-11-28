@@ -243,6 +243,29 @@ clears and hover produces position frames; FAIL = `clip=1` still set,
 which leaves the damaged-board hypothesis (the blocked Raspberry Pi
 cross-check, F24).
 
+Implementation note (P3.32, 2026-11-28): hardware round 7 (findings
+F25–F28) ran the first two rungs on the bench and BOTH FAILED their
+criteria — with `cal=disable_all` confirmed running, the fresh boot's
+FIRST data frame still reported `sysinfo=0xA0 clip=1`, and the slow
+palm descent's 41 frames (touch/gesture only, position still zero)
+carried `clip=1` too; `cal=disable_idle` showed the same first-frame
+verdict (its own hover produced zero frames — one trial, but the boot
+frame decides the FAIL either way). Auto-calibration — any single
+masked feature or the whole suite — is ELIMINATED as the cause of the
+boot-time receiver saturation: the Clipping bit is present before any
+calibration feature could run. The ladder therefore gained its third
+rung as part of the experiment set: `SKYWRITER_CAL_DISABLE_AFA=1`
+sends the vendor's own canonical disable (Argument0 = 0x3F, mask =
+0x3F — six bits: the five masked features plus bit 5, calibration
+triggered by AFA, the adaptive filter; the vendor's Appendix A
+"Disable" fixed command), named `cal=disable_afa` on the serial lines
+and ignored when a lower-rung knob is set. PASS/FAIL unchanged (PASS =
+a live frame shows `clip=0` and position events appear, monitor
+attached BEFORE the palm descent so the per-frame evidence is
+captured); if this rung also fails, the code-side ladder is EXHAUSTED
+and the remaining hypotheses are the damaged board and the blocked
+Raspberry Pi cross-check (F24).
+
 ## 7. Performance
 
 | Metric | Requirement | Verification |

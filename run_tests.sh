@@ -81,12 +81,14 @@ fixture_replay() {
 # Build output goes to a temporary directory so the flash-tool-managed
 # build/ folders are never touched.
 #
-# P3.31: the controller sketch is additionally compiled in BOTH calibration
-# experiment variants — its `#if SKYWRITER_CAL_DISABLE` / `#elif
-# SKYWRITER_CAL_DISABLE_IDLE` branches are never compiled by the default
+# P3.31/P3.32: the controller sketch is additionally compiled in ALL
+# THREE calibration experiment variants — its `#if
+# SKYWRITER_CAL_DISABLE` / `#elif SKYWRITER_CAL_DISABLE_IDLE` / `#elif
+# SKYWRITER_CAL_DISABLE_AFA` branches are never compiled by the default
 # build above, and the hardware loop flashes exactly these builds (the
-# first with the acceptance trace enabled, which also exercises the trace
-# region and the two-switch combination).
+# first with the acceptance trace enabled, which also exercises the
+# trace region and the two-switch combination; the third is the
+# vendor-canonical 0x3F rung landed after round 7 failed the others).
 sketch_compile() {
   if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "arduino-cli not installed — compile check skipped (the dev container provides it)"
@@ -108,6 +110,10 @@ sketch_compile() {
   arduino-cli compile -b "$FQBN" \
     --build-property "compiler.cpp.extra_flags=-DSKYWRITER_CAL_DISABLE_IDLE=1" \
     --output-dir "$out/experiment_cal_idle" pico-arduino/SkywriterController || rc=1
+  echo "compiling pico-arduino/SkywriterController (P3.32 experiment: vendor-canonical 0x3F calibration disable)"
+  arduino-cli compile -b "$FQBN" \
+    --build-property "compiler.cpp.extra_flags=-DSKYWRITER_CAL_DISABLE_AFA=1" \
+    --output-dir "$out/experiment_cal_afa" pico-arduino/SkywriterController || rc=1
   rm -rf "$out"
   return $rc
 }

@@ -23,6 +23,15 @@
 #                                 calibration off (Argument0 bit 3, mask bit
 #                                 3), cal=disable_idle on the serial lines.
 #                                 Ignored when SKYWRITER_CAL_DISABLE=1.
+#   SKYWRITER_CAL_DISABLE_AFA=1   the vendor-canonical rung (fix item
+#                                 P3.32, opened by hardware round 7's two
+#                                 FAILs): the vendor's own Appendix A
+#                                 "Disable" fixed command — Argument0 =
+#                                 0x3F, mask = 0x3F, SIX bits (the five
+#                                 masked features plus bit 5, calibration
+#                                 triggered by AFA — the adaptive filter),
+#                                 cal=disable_afa on the serial lines.
+#                                 Ignored when a lower-rung knob is set.
 # The knobs may combine — the acceptance experiment build is
 #   SKYWRITER_EVENT_TRACE=1 SKYWRITER_CAL_DISABLE=1 ./flash.sh …
 set -eu
@@ -66,6 +75,8 @@ if [ "${SKYWRITER_CAL_DISABLE:-0}" = "1" ]; then
   set -- "$@" -DSKYWRITER_CAL_DISABLE=1
 elif [ "${SKYWRITER_CAL_DISABLE_IDLE:-0}" = "1" ]; then
   set -- "$@" -DSKYWRITER_CAL_DISABLE_IDLE=1
+elif [ "${SKYWRITER_CAL_DISABLE_AFA:-0}" = "1" ]; then
+  set -- "$@" -DSKYWRITER_CAL_DISABLE_AFA=1
 fi
 if [ "$#" -gt 0 ]; then
   FOLDED_FLAGS=""
