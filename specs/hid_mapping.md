@@ -173,6 +173,18 @@ off. This is a sensor constraint, not an implementation choice.
 (`KeyboardBLE.sendConsumerReport`, usages: Next Track `0x00B5`, Previous Track
 `0x00B6`, Volume Inc `0x00E9`, Volume Dec `0x00EA`).
 
+**Keyboard usage codes (revision note 2026-11-17, fix item P3.21 — hardware
+session 1 typed letters for taps):** the USB HID Usage Tables keyboard page
+gives `Page Up` = `0x4B` (75) and `Page Down` = `0x4E` (78); `0x4F` (79) is
+`Right Arrow`. Earlier drafts of this spec and the implementation used 78/79 —
+wrong, and on hardware a raw usage 78 reached the Bluetooth keyboard library's
+`press()`, which treats values 0–127 as ASCII characters (78 = "N"). Two
+corrections landed together: the usage constants are 75/78 (cross-checked
+against the Arduino BLE core's own table: `KEY_PAGE_UP` 0xD3 = 136 + 75,
+`KEY_PAGE_DOWN` 0xD6 = 136 + 78), and the firmware sink sends keyboard usages
+in the core's non-printing range (`usage + 136`) on both press and release.
+Canonical records in the fixtures carry the RAW usage (75/78).
+
 **Event priority:** if a single frame yields several events (e.g. touch +
 position), all are processed per §2. If gestures and touches arrive in the same
 5 ms window they are independent — no arbitration needed.

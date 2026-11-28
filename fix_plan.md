@@ -251,6 +251,217 @@ docker run -it --rm \
    `READY_FOR_HW` marker is written in the repository root listing
    precisely the Phase-4 tests (P4.1–P4.6) and their pass/fail
    criteria — the outer hardware loop takes over from here.
+   Update (2026-11-08, hardware session 1 — run by a person on the host, not
+   by the loop). Results reported so far:
+   - Sensor bus: the gesture sensor is detected on the I2C (Inter-Integrated
+     Circuit, the two-wire sensor bus). Partial P4.1 evidence only — the
+     serial boot lines were reported as all present (sensor ready,
+      HID started, pace line on connect), but no capture file exists yet and
+      frame streaming is not recorded.
+   - Bluetooth scan: `Skywriter HID` is listed. Partial AC-BLE-01 (name
+     visible; "exactly one instance" not yet checked).
+   - Pairing: a Linux (BlueZ) laptop paired successfully. Partial AC-BLE-03 (pairing only;
+     battery at 100 % and the Device Information reads are not yet checked).
+   - Use: the laptop reacted to the sensor, but the behaviour was haphazard.
+     Reported symptoms: the cursor jumped or teleported, moved the wrong way
+     or along the wrong axis, and keyboard and media keys fired. Keyboard
+     presses also typed letters. Traced in the code: the Page Up and Page
+     Down taps send the wrong key codes, which the keyboard driver types as
+     letters — tracked as P3.21. The jumps, direction and media-key symptoms
+     are the subject of the gate item P4.0. The device is NOT usable as a
+     mouse yet.
+   - Method: manual only (no scripts); the sketch was built and flashed with
+      `pico-arduino/flash.sh`.
+    - Not yet run: the AC-BLE-02 Report Map check (the laptop's device list was
+      not checked, so "one device, mouse and keyboard" is unconfirmed), the
+      power-cycle reconnect
+     (AC-BLE-06), the latency and report-rate probe (AC-BLE-04), link-loss
+     advertising (AC-BLE-05), the multi-OS smoke test (AC-BLE-08) and real-frame
+     capture (P4.6). No `HW_REPORT.md` was written, so `READY_FOR_HW` stays in
+     place.
+    Update (2026-11-09, hardware session 2 — serial monitor capture, no code
+    change). The monitor was attached after boot, so the boot lines are not in
+    the log. Seen: `SKYWRITER-HID sensor_firmware valid=0xAA version=1.1.18`,
+    the link connecting with `pace report_interval_ms=15`, and `ble_resync` /
+    `ble_connected` printed twice with no `ble_dropped` between them (open, see
+    P4.3). The user reported that only single and double clicks appeared to
+    work.
+    Update (2026-11-16, hardware session 3 — after the permanent rewiring; the
+    rewiring date was not recorded). The wires were secured to stop loose
+    connections, which is the only change reported. The Bluetooth link is up
+    (the laptop shows battery level and signal strength) and the serial monitor
+    shows no error, but NO input of any kind reaches the laptop: no pointer
+    movement, click, tap, scroll, key or media key. Session 2 still had clicks
+    working, so this is a total loss of input, not the haphazard behaviour of
+    sessions 1–2. It blocks P4.0 and is logged as the first Phase-4 gate, P4.0a.
+    No code was changed in this update.
+   Update (2026-11-17, loop iteration after HW_REPORT.md — code commit
+   `1c8bbb2`): the hardware report's code-fixable failures are closed, and
+   `HW_REPORT.md` is removed (its facts are preserved here). Section 4 row
+   outcomes:
+   - **F1 (Page Up / Page Down typed letters, P3.21) — FIXED** by P3.21
+     (commit `1c8bbb2`): usage constants corrected to the USB HID Usage
+     Tables values (Page Up 0x4B = 75, Page Down 0x4E = 78; 0x4F = 79 is
+     Right Arrow) in the spec §6 revision note, the mapper constants, the
+     manifest and the harness grammar; and the firmware sink now sends
+     keyboard usages in the Bluetooth keyboard library's non-printing
+     range (usage + 136) on BOTH press and release — the raw usage 78
+     that typed "N" can never reach the library again (two new source
+     pins in `tests/test_firmware_sketch.py`; `tap_north`/`tap_south`
+     manifest expectations now 75/78 and replay-asserted). On hardware:
+     a north tap must give Page Up and a south tap Page Down with no
+     letters (checked in P4.0 / P4.5).
+   - **F2 (no input since session 3, P4.0a) — code parts landed**: P3.22
+     (the `SKYSTATE health` counters line, the session's main instrument)
+     and P3.23 (the transfer line is always released, with its pull-up
+     restored — H1 and H2) are in commit `1c8bbb2` and ready to flash.
+     The wiring (H3) is still not eliminated (joint quality / flexing),
+     and H4/H5/H6 stay hardware questions. The human steps in the
+     report's section 5 (flash `pico-arduino/SkywriterController` via
+     `./flash.sh SkywriterController`, full boot log T3, `hid-recorder`/
+     `evtest` T4, counters T5, flex T6) are the next hardware loop's work.
+   - **F3 (haphazard pointer, P4.0) — still blocked by F2**, unchanged:
+     do not retune `GAIN` or `JUMP_THRESHOLD` yet.
+   - **F4 (duplicate connect lines, P4.3) — OPEN**, unchanged: check the
+     next serial log (now with uptime + disconnect counters) before
+     changing connection handling.
+   - **F5 ("select all" ≈ Ctrl+A, 2026-11-17) — recorded, hypothesis
+     narrowed in code**: the Bluetooth keyboard library's `press()` adds
+     modifier bits ONLY through its ASCII path (Shift / AltGr from the
+     layout table; there is no Ctrl path in `press()` at all), so the old
+     raw-usage-78 call could produce "N" (+ Shift) but NEVER Ctrl+A.
+     After P3.21 the raw path is gone entirely (`usage + 136` on every
+     keyboard press/release — `KEY_PAGE_UP` 0xD3 = 136 + 75 in the core's
+     own table). Consequence for the next session: with the P3.21 build
+     flashed, a "select all" would have to come from somewhere other than
+     this firmware's keyboard report (a stuck host-side state, another
+     input device, or the mouse report misread) — if it recurs, check the
+     laptop's device list first (T4's `evtest`/`hid-recorder` shows the
+     device each event came from).
+   - **F6 (repeated sensor firmware messages, session 3 flex) — now
+     decidable**: with P3.22 flashed, a sensor restart gives a small
+     firmware-frame count with a fresh `sensor_firmware` line each time
+     (and uptime intact unless the Pico itself reset, H5); a stalled read
+     gives the firmware-frame count climbing at the read rate while the
+     sensor-data count stops — and P3.23 removes the one code defect
+     (the line-left-low early return) that could produce such a stall.
+    Update (2026-11-17, hardware session 3 follow-up — no code change). All
+    sensor-to-Pico wires have moved from the breadboard to veroboard (made on or
+    before 2026-11-16; exact date not recorded). Unplugging the Pico changed
+    nothing, and the firmware has not been reflashed since session 2. Input has
+    typically been absent since the first breadboard attempt, with two known
+    exceptions: session 2's clicks, and an "N" that appeared in a text box on
+    2026-11-17 (a north tap typed as the letter N — the P3.21 defect). So the
+    fault is intermittent, not a total loss. The user also reported a "select
+    all" at the same moment; its cause is not known. No oscilloscope or logic
+    analyser is available, so the firmware counters (P3.22) become the main
+    instrument. The revised diagnosis is in P4.0a.
+    Update (2026-11-18, first `SKYSTATE health` capture — build `1c8bbb2`
+    flashed and running). The counters delivered their verdict, and it is
+    not any of H1–H6 as ranked. Captured readings (printed every 2 s;
+    uptime 883–909 s; counts are cumulative since boot): polls=67390,
+    ts_low=67390 (100.00 %), short_reads=0 (0.00 %), frames sensor=0
+    status=0 fw=0 other=67390 (100 %), events pos/touch/gest/wheel all 0,
+    dropped=0, ble conn=5, uptime continuous. What each reading proves:
+    - short_reads=0 over ~69,000 reads: every read returned at least the
+      4 header bytes, so the sensor acknowledges at 0x42 and serves bytes
+      every time — power, wiring and the I2C (Inter-Integrated Circuit)
+      bus electrically work. A dead, unpowered or hard-reset sensor
+      would refuse to acknowledge and put short_reads at 100 % instead.
+    - Boot passed (the health lines and `ble conn=5` can only print if
+      configure_sensor() succeeded — it loops forever printing
+      sensor_config_failed otherwise): all four runtime commands were
+      acknowledged at this boot through the sketch's EXACTLY-26-byte
+      acknowledge reads. The sensor returned well-formed frames at boot.
+    - ts_low=100 % cumulative, from the first poll after boot: with the
+      soldered 10 kΩ pull-up, a floating or loose wire reads HIGH, so
+      the sensor is actively asserting data-ready — H2 ruled out, and
+      the sensor is alive and wants to hand over frames.
+    - frames other=100 % from the first poll: no read since boot produced
+      a byte-3 message identity of 0x91/0x15/0x83. A configured sensor
+      streams 0x91 continuously, so the frames it IS producing are not
+      reaching the driver as valid frames — which also yields zero
+      events with zero drops (H6's gate is downstream of decoding).
+    Verdict: H1 eliminated (the failed-read path never ran — short_reads
+    is 0 — and P3.23 releases the line on every path anyway); H2
+    eliminated (the line is actively low, not floating); H5 eliminated
+    (uptime continuous, no reset); H6 eliminated (nothing ever decoded
+    to drop); H4 unlikely (a restarted sensor would idle the transfer
+    line high, so ts_low would fall toward 0 % instead of holding 100 %,
+    and no sensor_firmware line appeared); H3 not needed to explain the
+    signature (the wires demonstrably carry working signals). New
+    leading suspect: H7 below, with its evidence instrument P3.24 and
+    its fix P3.25.
+    Update (2026-11-19, T1 meter reading + boot capture from power-up).
+    - T1 on the transfer (TS) line: with the hardware powered and the
+      firmware running, TRFR to GND reads 15.4 mV, stable. That is
+      effectively 0 V: with the soldered 10 kΩ pull-up to 3.3 V, a
+      floating or loose wire reads near 3.3 V, so something on the line
+      is actively pulling it to ground. Consistent with the sensor
+      continuously asserting data-ready (H7's picture: it has frames to
+      hand over that the over-read mangles) — but also consistent with a
+      TS-to-GND short on the veroboard, which would freeze the sensor's
+      message queue the same way (the sensor never sees the host's
+      release edge). The meter cannot separate those two; the P3.24
+      snapshot separates them (shifted 0x91 = H7's misalignment; all
+      0x00 = padding on empty reads → then hunt the short).
+      Discriminator available without code: with the Pico still running,
+      disconnect the SENSOR end of the 3.3 V supply wire — a real short
+      keeps TRFR at ~0 V, while a healthy line floats to ~3.3 V through
+      the pull-up. Record which before re-soldering anything.
+    - The boot capture is now on record from power-up (uptime 2 s first
+      health line): `ble_resync`/`ble_connected` printed, no
+      sensor_config_failed possible after that point (the sketch would
+      never have reached the radio), confirming again that all four
+      runtime commands were acknowledged at this boot. The health line
+      repeats the 2026-11-18 signature from poll 1: ts_low=100 %,
+      short_reads=0, frames other=100 %.
+    - NEW evidence for P4.3/F4: five `ble_connected` events within the
+      first 4 seconds of uptime (conn=1 → conn=5 across the first two
+      health lines), with zero `ble_dropped` between them — the
+      duplicate-connect behaviour the ledger flagged in session 2, now
+      captured with clean timing. Record it in the P4.3 log analysis;
+      do not change connection handling yet.
+    Update (2026-11-19, loop iteration after HW_REPORT.md session 4 —
+    code commit `2267497`): the report's one open failure is answered.
+    - **F7 (no valid frames decode, other=100 % — P4.0a H7) — FIXED** by
+      landing both §3f items in one change: P3.25 replaces the single
+      132-byte I2C over-read with the Python driver's sized reads (read
+      exactly 26 first; only a longer message — its own Size field says
+      so — is fetched with bounded continuation reads; incomplete or
+      corrupt-Size frames are never dispatched half-read), and P3.24
+      adds the unknown-frame snapshot (first 8 frame bytes + the byte
+      count the reads actually returned) that the health line prints as
+      `other_snap=`/`other_read=`. The 132-byte Fw_Version_Info capture
+      survives through the continuations (the F17 replay stays green),
+      and the health line's transfer accounting now closes: short +
+      sensor + status + fw + other = every transfer. See the P3.24 /
+      P3.25 Done entries for the details and the red→green test
+      evidence. On hardware: flash the new build and rerun T5 — the
+      prediction is `frames sensor` climbing at roughly the poll rate,
+      `other` near zero, and pointer/touch input reaching the laptop;
+      if `other` persists, the snapshot content names the cause (its
+      four signatures are in P4.0a's update below).
+    - **F4/P4.3 note (five connect lines in 4 s, zero drops) — recorded,
+      deferred** as the report itself defers it: the sensor-side fault is
+      the gate; handle it when P4.3 runs.
+    - **Report sections 5–6 (the host-side work) — moved to P4.0a's
+      update below**: the supply-wire discriminator (with the Pico
+      running, disconnect the SENSOR end of the 3.3 V supply wire — a
+      real transfer-line-to-ground short keeps TRFR at ~0 V, a healthy
+      line floats to ~3.3 V) and the next-run checklist (T5 re-capture
+      from power-up, then the snapshot signatures, then the gesture
+      acceptance run).
+    - HW_REPORT.md is removed; its measured facts (counter captures,
+      TRFR 15.4 mV, boot captures) were already recorded in the status
+      snapshot entries above and stay there. 123 pytest tests;
+      `run_tests.sh` 4/4; all four Pico W sketches compile (22 % flash /
+      34 % RAM, unchanged).
+    - No new work items discovered. One scope decision recorded in the
+      P3.24 Done entry: the snapshot fires on every undispatched frame
+      (a superset of the item's identity-only letter) because P3.25's
+      Size validation would otherwise hide exactly the corrupt-Size
+      frames H7 produces.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -302,6 +513,7 @@ docker run -it --rm \
 - [x] W7 Dry-run the loop: `RALPH_MAX_ITER=1 docker run … skywriter-dev
       bash ralph.sh` — confirm the agent commits, logs land in `logs/`, marker
       files stop the loop. Fix any friction found.
+- [x] W8 → done, moved to the Done section below.
 
 ## Phase 3 — Implementation (order is deliberate: test harness first)
 
@@ -353,20 +565,268 @@ in Phase 4 on hardware
 - [x] P3.19 → done, moved to the Done section below.
 - [x] P3.20 → done, moved to the Done section below (the `READY_FOR_HW`
       marker's Phase-4 test list is the ledger for the outer loop).
+- [x] P3.21 → done, moved to the Done section below.
+- [x] P3.22 → done, moved to the Done section below.
+- [x] P3.23 → done, moved to the Done section below.
+
+### 3f — Post-counter items (opened 2026-11-18 from the first SKYSTATE
+health capture; evidence and verdict in P4.0a's 2026-11-18 update,
+new leading suspect H7)
+
+- [x] P3.24 → done, moved to the Done section below.
+- [x] P3.25 → done, moved to the Done section below.
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
 The container can *write* these files but only the host can *run* them. Each
 item names what needs the Pico W plugged in.
 
+- [ ] P4.0a **GATE — no input reaches the laptop since the permanent rewiring
+      (hardware session 3, 2026-11-16)**: the Bluetooth link is up and the
+      serial monitor shows no error, but no pointer movement, click, tap,
+      scroll, key or media key arrives at the laptop. Session 2 had single and
+      double clicks working, so this is a total loss of input, not a tuning
+      problem. It blocks P4.0 (its diagnosis cannot start while nothing is
+      sent), P4.5 and AC-BLE-08.
+      Known so far:
+      - The Bluetooth start-up runs only after all four sensor configuration
+        commands are acknowledged (`configure_sensor()` in
+        `SkywriterController.ino` loops forever otherwise). So on this boot the
+        I2C data wires, the sensor's power and the reset pulse on GPIO 10
+        worked.
+      - That acknowledgement check drives the transfer (TS) line itself and
+        never reads the sensor's data-ready signal, so it does NOT show that the
+        sensor's signal reaches the Pico. The data-ready input is TS on GPIO 9
+        (`SKYWRITER_PIN_TS`).
+      - Nothing in the sketch prints when a frame read fails or returns nothing,
+        so a quiet console proves nothing yet.
+      - Unplugging the Pico (a full power cycle) did not change the behaviour
+        (2026-11-17). The firmware has not been reflashed since session 2.
+      - All sensor-to-Pico wires moved from the breadboard to veroboard (on or
+        before 2026-11-16). This is the only physical change reported. A
+        veroboard joint can bridge two neighbouring pins, cold or crack, or put
+        a wire on the wrong pin, and breadboard contacts never did that.
+      - Static wiring checks, all passing (2026-11-17, reported by the user):
+        each signal reaches its intended Pico pin (SDA GP4, SCL GP5, TS GP9,
+        RESET GP10); no solder bridges between signal wires; no bridging
+        between rails; the sensor is supplied from pin 36 and reads 3.3 V at the
+        sensor end of the supply wire; the lines idle near 3.3 V with the
+        multimeter on the 3V3 reference. The pull-up resistors are soldered on
+        the veroboard between 3V3 and each signal's rail. Measured 2026-11-17
+        with the multimeter, board powered off: SDA 4.69 kΩ, SCL 4.67 kΩ,
+        TRFR 10.00 kΩ, RESET 10.00 kΩ (see HW_REPORT.md section 5, step 1). These checks do not show joint quality or the
+        sensor's signal behaviour, so the wiring is not eliminated.
+      - Input has typically been absent since the first breadboard attempt. The
+        known exceptions are the session 2 clicks and the "N" of 2026-11-17, so
+        the fault looks intermittent rather than total.
+      - The "N" is the P3.21 symptom on the board: a north tap sent as raw
+        keyboard code 78, which the keyboard library types as "N". So the
+        sensor-to-keyboard path worked at least once. The user also reported a
+        "select all" at the same moment; its cause is not known.
+      - The sketch's sensor acknowledgement retries each command up to 10 times
+        and always releases the transfer line, so a bus that is only sometimes
+        reliable can still pass boot (the Bluetooth link came up).
+      Candidate causes (none confirmed). Ranking revised 2026-11-17 after the
+      static wiring checks passed: wiring (H3) is no longer the leading
+      suspect, but it is not eliminated (joint quality and a fault that shows
+      only under flexing cannot be seen statically). No single cause leads now;
+      the firmware and sensor-side causes (H1, H2, H4) need the counters (P3.22)
+      to separate them. H1 turns any failed read into a silent stall whatever
+      the root cause, so P3.23 is needed either way.
+      - H1 — transfer line left LOW (code-traced). In
+        `arduino/Skywriter/skywriter.cpp` `poll()`, a read that returns fewer
+        than 4 header bytes takes an early `return` (lines 41–43) before the
+        transfer line is released (lines 73–74). With TS held LOW the sensor's
+        data buffers stay pinned (P3.11d's note), so nothing new arrives. The
+        same early return can repeat on every later poll, so the link stays up
+        and nothing is printed. The Python driver had the same class of defect
+        and fixed it in P3.11d; the Arduino driver never got that fix. Contrast
+        the boot path:
+        it retries each acknowledgement up to 10 times and always releases the
+        line. `poll()` has no release on a failed read, so the line stays low
+        until a later read succeeds.
+      - H2 — transfer line floats (code-traced). The pin loses its pull-up
+        early: the sketch's own acknowledgement path releases it as plain INPUT
+        (sketch lines 174–175) at boot, and `poll()` does the same after every
+        transfer (library line 74). The Python driver restores the pull-up on
+        release (`library/skywriter/__init__.py`, line 534). So a loose or
+        disconnected TS wire reads at random and can trigger the H1 path. This
+        reopens the P3.19 decision. The 10 kΩ pull-up soldered from TRFR to 3V3
+        (2026-11-17) holds the line high while its joint is good, so H2 is less
+        likely unless that joint fails.
+      - H3 — wiring after the veroboard move: a solder bridge between
+        neighbouring pins, a cold or cracked joint, a wire on the wrong pin, or
+        missing pull-ups. Demoted 2026-11-17: pins, bridges and rails pass the
+        static checks, and the external pull-ups are soldered on the veroboard
+        (4.7 kΩ on SDA and SCL, 10 kΩ on TRFR and RESET). The Pico's own I2C
+        pull-ups are weak (tens of kilohms; SDA at `Wire.cpp` line 129), so the
+        external ones matter. Not eliminated: a cold or cracked joint passes a
+        static check and shows only under flexing (T6).
+      - H4 — the sensor restarted and lost its configuration. The sketch sends
+        the four configuration commands once, from `setup()`, and never again,
+        so a power or reset-line glitch would leave the sensor unconfigured.
+        Session 2 printed a `sensor_firmware` line mid-log, after the connection
+        lines; check whether that was a sensor restart.
+      - H5 — the Pico W itself reset (brownout from loose power wiring). A new
+        `SKYWRITER-HID boot` line shows it if the monitor stayed attached;
+        otherwise the serial connection drops.
+      - H6 — events dropped, or the laptop reading a different input device. The
+        sensor callbacks drop events while the link is closed
+        (`sensor_events_dropping_unconnected`).
+      - H7 — the 132-byte over-read desynchronises the sensor's message
+        framing (code-traced; NEW leading suspect, 2026-11-18). The
+        Arduino driver's poll() clocks a single 132-byte read (the
+        P3.11b request) while a sensor data frame is 26 bytes long, so
+        the host asks for 106 bytes past the end of the message. What
+        the sensor serves there is undefined — the P4.1 note has carried
+        this exact worry, unconfirmed on hardware, since P3.11b. If the
+        sensor serves the start of the next queued message there, its
+        internal read pointer is left mid-frame and EVERY later read
+        starts inside a frame, so the header's identity byte never lands
+        on 0x91/0x15/0x83 — exactly the other=100 %-from-the-first-poll
+        signature the 2026-11-18 capture shows. It also explains the
+        intermittent history (sessions 1–2's occasional valid frames =
+        lucky realignment when a read drained the queue onto a boundary)
+        and why boot always passes (the acknowledge path reads exactly
+        26 bytes). The Python reference driver never over-reads: 26
+        bytes first, then continuation reads sized from the frame's own
+        Size field (P3.11c).
+      Tests, cheapest first (human unless marked):
+      - T0 — power OFF, multimeter in continuity mode. Check each sensor pin
+        against the Pico pin the sketch uses: SDA to GP4 (physical pin 6), SCL to
+        GP5 (pin 7), TS to GP9 (pin 12), reset to GP10 (pin 14), sensor supply to
+        the 3.3 V pin (pin 36), and GND to a GND pin. Then check that no two
+        signal wires touch (a bridge) and none touches the 3.3 V or GND rail.
+        Wiggle each joint while listening: a cold joint beeps on and off. Before
+        powering the board, confirm the sensor is supplied from pin 36, not the
+        5 V pin (pin 40); the RP2040's GPIO pins are not 5 V tolerant. Write down
+        the wire list: sensor pin, Pico pin, and what changed in the rewiring.
+      - T1 — power ON, sketch running, multimeter in DC volts, one probe on one
+        pin at a time, from each signal to GND. SDA and SCL should idle near
+        3.3 V (the bus pull-ups). Reset is driven high by the Pico, so it should
+        read near 3.3 V. TS is expected to read high most of the time; a reading
+        that wanders means it is floating (H2). Near 0 V on any line = held low
+        or shorted (H1, or H3). If the meter has MIN/MAX, it may catch brief dips
+        on TS; a MIN that never leaves the high level suggests the sensor is not
+        signalling at all. Its absence proves nothing.
+      - T3 — full serial log with the logger already running when the board
+        boots (the port re-appears after a reset, so the logger must reopen it).
+        Look for the boot line, `sensor_ok`, `hid_started`, any
+        `sensor_config_failed`, a second `boot` line (H5), a mid-run
+        `sensor_firmware` line (H4), and `sensor_events_dropping_unconnected`
+        (H6).
+      - T4 — on the Linux laptop, `hid-recorder` (hid-tools) or `evtest` on the
+        Skywriter's input device, during a still hand, one slow swipe and one tap
+        per zone. No reports at all = link or host (H6). Reports present but no
+        cursor = a host-side setting. Reports present = the Pico sends, and the
+        fault is in what it sends.
+      - T5 — the main instrument now (no oscilloscope): the P3.22 counters, with
+        the monitor running. Look at short reads as a share of all polls, TS-low
+        polls as a share of all polls, frames read per second near the sensor's
+        rate, firmware frames (a new one means the sensor restarted), and uptime
+        (a reset shows as uptime dropping to zero). Needs P3.22 flashed.
+      - T6 — power ON, gently, after T0 and T1 pass, with P3.22 flashed: flex
+        each joint and wire in turn while watching T5. If the counters change at
+        the moment one joint moves, that joint is the fault.
+      Update (2026-11-17): the loop's code parts are landed (commit
+      `1c8bbb2`) — P3.22's `SKYSTATE health` counters (T5's instrument)
+      and P3.23's always-release + pull-up restore (removes H1 and H2's
+      silent-stall behaviour outright). Flash the diagnostic build with
+      `./flash.sh SkywriterController` from the `pico-arduino` folder and
+      run T3/T4/T5/T6 below; H1/H2 can no longer explain a quiet console
+      — if input is still absent with the counters green, H3/H4/H5/H6
+      are what remain, and the counters separate them.
+      Update (2026-11-18): the counters ran (see the capture update above)
+      and H1/H2/H5/H6 are out; H7 leads. The next loop's code work is
+      P3.24 (the unknown-frame content snapshot — the missing evidence)
+      and P3.25 (the read-protocol fix). After flashing that build, rerun
+      T5: the prediction to confirm or refute H7 is `frames sensor`
+      climbing at roughly the poll rate with `other` near zero, and
+      pointer/touch input reaching the laptop; if `other` persists, the
+      P3.24 snapshot names the content instead of the counters guessing.
+      Update (2026-11-19): P3.24 and P3.25 are LANDED (commit `2267497`)
+      — flash `./flash.sh SkywriterController` from the `pico-arduino`
+      folder and rerun T5 from power-up. The prediction stands as
+      written. If `other` persists, the health line now shows the
+      content: `other_snap=` first 8 bytes + `other_read=` actual count —
+      a 0x91 visible at a shifted offset = residual misalignment (the
+      sensor's read-pointer question becomes P4.1's); all 0x00 = padding
+      on empty reads, so run the supply-wire discriminator (disconnect
+      the SENSOR end of the 3.3 V supply wire with the Pico running: a
+      real TS-to-ground short keeps TRFR at ~0 V, a healthy line floats
+      to ~3.3 V through the pull-up) before re-soldering anything; all
+      0xFF = a wedged slave, power-cycle the sensor and retest; a known
+      identity with `other_read=` under the promised Size = the sensor
+      stopped serving mid-message (P4.1's continuation question). Then
+      gesture over the board: pointer, taps, AirWheel — the original
+      P4.0 acceptance run.
+      Closure: the tests that apply (T0–T6) recorded with their logs in
+      `HW_REPORT.md`; one root cause named and linked to its fix (P3.23 for H1;
+      a veroboard repair for H3; a new item for H4–H5 if confirmed); then P4.0
+      resumes. Do not retune `GAIN` or `JUMP_THRESHOLD` for
+      this symptom: it is not a tuning problem.
+
+- [ ] P4.0 **GATE — haphazard pointer (first finding of hardware session 1,
+      2026-11-08)**: the Skywriter pairs and reacts, but the cursor motion,
+      clicks and scrolling seemed haphazard and incoherent, so it is not yet
+      usable as a mouse. Blocks P4.5 (feel tuning) and the AC-BLE-08 smoke
+      test. Needs a person at the board: the loop can prepare the capture
+      tooling (P4.1) but cannot close this item alone.
+      Blocked by P4.0a: since the permanent rewiring (session 3, 2026-11-16) no
+      input reaches the laptop, so none of the diagnosis steps below can run yet.
+      Reported symptoms (session 1, Linux/BlueZ laptop): the cursor jumps or
+      teleports; it moves the wrong way or along the wrong axis; keyboard and
+      media keys fire. Clicks and scrolling were not listed as symptoms. The
+      typed letters are a separate, code-traced defect (P3.21) and are not part
+      of this diagnosis.
+      Diagnosis order (evidence before changes — do not retune `GAIN` or
+      `JUMP_THRESHOLD` until the measurements show whether noise is the cause):
+      1. Serial evidence: capture the console from power-up through a 30 s
+         hand-still period and a slow 30 s swipe. Confirm `SKYSTATE sensor_ok`,
+         `hid_started`, the `pace report_interval_ms=` line on connect, and
+         no `sensor_config_failed`.
+      2. Sensor side: log the raw x/y/z values for the same two periods. Hand
+         still: are values near zero (noise) or large? Hand moving: how many
+         per-frame jumps exceed `JUMP_THRESHOLD` (8192 raw), and how many frames
+         per second arrive (expected ~200)?
+      3. Host side: count the mouse reports the laptop receives per second, and
+         check cursor direction and axis per swipe, against the sensor log.
+         Late or missing reports point at the connection-interval pacing (P3.18)
+         or at dropped movement.
+      4. Channel separation: repeat each gesture alone — pointer only, touch
+         centre (a hold holds the left button, §6), tap, AirWheel rotation
+         (scroll), flick (volume and track keys). Find which channel produces
+         the unintended behaviour.
+      Hypotheses to test, not assumptions: (a) sensor noise amplified by
+      `GAIN` 1/256 and an 8192-unit `JUMP_THRESHOLD`; (b) an x/y sign or axis
+      mismatch between sensor and mouse report; (c) an unintended touch hold
+      or auto-scroll row firing during a swipe; (d) uneven report delivery
+      from the connection-interval handling (P3.18); (e) a sensor
+      configuration or frame-read problem (P3.11b/c, P3.16) corrupting
+      positions; (f) spurious flick or circle gestures from sensor noise
+      firing the track and volume keys (the media-key symptom — check with the
+      channel-separation step: flicks alone, then a still hand).
+      Closure: the cursor moves smoothly and in the expected direction; no
+      clicks or scrolls happen unless a deliberate gesture is made; the cause
+      is recorded in `HW_REPORT.md` with the captured logs. If the firmware
+      contradicts an acceptance criterion (AC-MAP-01, AC-BLE-04), add the
+      deviation row to `specs/README.md` in the same change that fixes it.
 - [ ] P4.1 `hw/serial_probe.py` (host, needs `pyserial`): flash a test sketch
       via `pico-arduino/flash.sh`, capture the USB serial port, assert boot
       banner, sensor frame streaming and framing. Hardware-check notes:
-      (P3.11b) the shared Arduino library's `poll()` now issues 132-byte I2C
-      reads (its former 32-byte request truncated the firmware-version
-      frame); the interface guide only promises that reading a whole message
-      works, so confirm on hardware that sensor-frame streaming is unaffected
-      when the host clocks more bytes than the current frame contains.
+      (P3.25, superseding the old P3.11b single-request note) the shared
+      Arduino library's `poll()` now reads EXACTLY 26 bytes first and
+      fetches a longer message with continuation reads bounded by the
+      frame's own Size field while the transfer line is still asserted —
+      the Python driver's P3.11c pattern, replacing the 132-byte request
+      whose over-read was hardware session 4's leading suspect (P4.0a H7,
+      `other=100 %` from the first poll). Confirm on hardware: sensor
+      frames stream intact (the P4.0a T5 prediction — `frames sensor`
+      climbing at roughly the poll rate, `other` near zero), and the
+      sensor's I2C buffer really does continue across the separate read
+      transactions of one asserted transfer (the fixture replay proves
+      the driver-side arithmetic only; the 132-byte version frame must
+      still arrive complete as 26 + 32 + 32 + 32 + 10).
       (P3.11c) the Raspberry Pi Python driver now sizes its reads from the
       frame's Size field and fetches frames longer than the first 26-byte
       read with chunked continuation reads (26 + 32 + 32 + 32 + 10 for the
@@ -375,9 +835,20 @@ item names what needs the Pico W plugged in.
       continues across separate read transactions of one asserted transfer
       (the fixture replay only proves the driver-side arithmetic), and that
       the RPi Linux SMBus 32-byte single-call cap is respected.
+      Session 1 (2026-11-08): the sensor was detected on the I2C bus — partial
+      evidence only. The serial boot lines were reported as all present, but
+      no capture file exists yet, so the banner, frame streaming and
+      whole-frame read checks are not yet recorded.
+      Session 3 (2026-11-16): no sensor-frame evidence since the permanent
+      rewiring; P4.0a T3 and T5 supply it.
 - [ ] P4.2 `hw/ble_hid_probe.py` (host, needs `bleak` + the host's Bluetooth
       radio): automate scan/GATT/pairing/services — target `AC-BLE-01`,
       `AC-BLE-02`, `AC-BLE-03`.
+      Session 1 (2026-11-08): the scan lists `Skywriter HID` (AC-BLE-01, name
+      part only — "exactly one instance" not yet checked); pairing with a
+      laptop succeeded (AC-BLE-03, pairing part only). Not yet checked: the
+      single composite HID device and its Report Map (AC-BLE-02), and the
+      Device Information reads and battery = 100 % (AC-BLE-03).
 - [ ] P4.3 `hw/ble_hid_probe.py` lifecycle part: latency/report-rate/
       reconnect/bond — `AC-BLE-04`, `AC-BLE-05`, `AC-BLE-06`, `AC-BLE-07`.
       Bond persistence (`AC-BLE-06`) answers `ble_hid.md` §5 open question 1.
@@ -386,13 +857,38 @@ item names what needs the Pico W plugged in.
       probe should EXPECT "bonded host reconnects after a Pico W power
       cycle WITHOUT re-pairing" to PASS; record a spec-deviation row only
       if the radio behaves otherwise.
+      Session 1 (2026-11-08): not started. The power-cycle reconnect (AC-BLE-06)
+      has not been tested; only one laptop pairing has been done.
+      Session 2 (2026-11-09): the log showed `ble_resync` and `ble_connected`
+      twice with no `ble_dropped` between. Open: a silent drop, a reset (P4.0a
+      H5), or a second connection? Check the P4.0a T3 log before changing the
+      connection handling. The same log began with `ble_dropped`,
+      `ble_advertising` and `waiting_for_host`, so a link drop happened before
+      the first visible connection.
+      Session 4 (2026-11-19): the duplicate-connect behaviour is now captured
+      with clean timing from power-up — five `ble_resync`/`ble_connected`
+      pairs within the first 4 seconds of uptime (the sketch's connect
+      counter goes conn=1 → conn=5 across the first two health lines) with
+      ZERO `ble_dropped` between them, and uptime continuous (no reset, H5
+      ruled out for these). So the Bluetooth stack is reporting several
+      connection events in a row while the sketch sees no disconnect — see
+      P4.0a's 2026-11-19 update. Analysis and any fix stay deferred: the
+      sensor-side fault (H7) is the gate; handle this when P4.3 runs.
 - [ ] P4.4 Outer loop driver `ralph_hw.sh` + `HW_REPORT.md` protocol: run the
       inner loop until `READY_FOR_HW`, flash + probe, write `HW_REPORT.md`
       (pass/fail + captured logs), commit; `ralph.sh` clears `READY_FOR_HW`
       on its next start once `HW_REPORT.md` exists.
+      Note (2026-11-19): the `ff5d36f` retirement of `HW_REPORT.md` broke
+      this handshake — `ralph.sh` refused to consume the `READY_FOR_HW`
+      marker without the file. `HW_REPORT.md` is recreated with the session-4
+      results (2026-11-18/19 counters, boot capture, TRFR voltage 15.4 mV;
+      failures F7 → P3.24/P3.25). The file is part of the protocol and must
+      be written for every hardware round; retiring it again would deadlock
+      the inner loop the same way.
 - [ ] P4.5 Manual checks: `AC-BLE-08` multi-OS smoke test and gesture feel
       tuning (`GAIN`, `JUMP_THRESHOLD`, `TOUCH_RELEASE_MS` — record final
-      values back into `specs/hid_mapping.md` §3).
+      values back into `specs/hid_mapping.md` §3). Blocked by P4.0: tuning
+      means nothing until the pointer moves coherently.
 - [ ] P4.6 Capture real sensor frames on hardware and reconcile every fixture
       not marked `vendor`; specifically confirm the AirWheel counter
       behaviour (does a real capture cross 255→0 as the signed 8-bit model
@@ -420,8 +916,261 @@ attribute table limit).
       (`AC-MAP-09` applies to the port too — reuse `tests/` P3.1's
       driver-agnostic harness with a MicroPython-decoder adapter).
 
+## Manual actions (human, not loop work)
+
+The loop must skip this section. Each item needs a person or the host, so none
+of them is a checkbox the loop can pick up:
+
+- Attach the session-1 evidence: the serial console capture (the `SKYSTATE`
+  lines, from power-up and during the haphazard use), the laptop's Bluetooth
+  or mouse event log for the same period, and the laptop's operating system
+  and Bluetooth stack. Needed for P4.0 and P4.1.
+- On the Linux laptop, record the raw HID input from the Skywriter during a
+  short session (for example `hid-recorder` from hid-tools, or `evtest` on the
+  Skywriter's input device node), in three parts: a still hand, a slow swipe,
+  and one tap per zone. Attach the output. This separates pointer, key and
+  media reports for P4.0 step 3 and checks AC-BLE-02's composite report layout.
+- Install the host tools for Phase 4: `pyserial` and `bleak` (see the Phase 4
+  hardware notes in the status snapshot).
+- Make the scripts executable on the host: `chmod +x ralph.sh run_tests.sh`
+  (chmod is blocked in the container).
+- Rebuild the `skywriter-dev` image on the host and confirm the C++ compiler
+  install (`g++ musl-dev` in the Dockerfile) so `run_tests.sh` works in a fresh
+  container without the manual `pip install --user ziglang` (P3.1 environment
+  note). Retire the ziglang fallback only after that is verified.
+- Resolve the `ralph-dry-run` branch (W7b): merge it into `pico-ble`, or run
+  `git push --set-upstream origin ralph-dry-run` once.
+- Session 3 checks (2026-11-16/17), in this order, without changing the wiring
+  in between:
+  1. T0: power off, multimeter continuity check of the veroboard, with the wire
+     list and the bridge check. Confirm the sensor is supplied from pin 36.
+  2. T1: power on, multimeter DC volts on SDA, SCL, TS and reset (and MIN/MAX on
+     TS if the meter has it). Record every reading.
+  3. T3: the full serial log, with the logger running when the board boots.
+  4. T4: `hid-recorder` or `evtest` on the Linux laptop, during a still hand, one
+     slow swipe and one tap per zone.
+  5. After P3.22 and P3.23 are implemented, flash the diagnostic build with
+     `pico-arduino/flash.sh`, keep the monitor running, then run T5 and T6.
+  Steps 1 and 2 passed on 2026-11-17 (static checks, see the P4.0a answers
+  above). Do not change the wiring again until steps 3 and 4 are recorded.
+- Answers recorded 2026-11-17 (HW_REPORT.md section 6 holds the detail):
+  - Multimeter reference: probe on 3V3. TRFR exactly 0 V difference (idle
+    high); SDA, SCL and RESET near 0 V difference (idle high).
+  - Each signal reaches its intended Pico pin; no solder bridges.
+  - Pull-up resistors: soldered on the veroboard between 3V3 and each signal's
+    rail. Measured 2026-11-17 with the board powered off: SDA 4.69 kΩ, SCL
+    4.67 kΩ, TRFR 10.00 kΩ, RESET 10.00 kΩ.
+  - Sensor-end supply: 3.3 V at the end of the supply wire (from pin 36).
+  - The "N" and "select all": the hand was on the sensor's north side; the
+    "select all" looked like Ctrl+A when the fingers were at the sensor's
+    edges. The cause is not known. Hypothesis for P3.21: a modifier bit or a
+    stuck key in the keyboard report.
+- Do not delete `READY_FOR_HW` by hand to restart the loop. The loop would pick
+  P4.0a first, and P4.0a needs the board. The loop restarts only after
+  `HW_REPORT.md` exists (P4.4).
+
 ## Done
 
+- P3.25 — the Arduino driver reads the sensor the Python way: exactly 26
+  bytes first, longer messages by their own Size field (commit `2267497`)
+  — the H7 fix, hardware report session-4's failure F7. In plain
+  language: the Pico used to ask the sensor for 132 bytes on every read
+  while a normal message is 26 — clocking 106 bytes past the end of each
+  message into undefined territory. If the sensor serves the start of the
+  next queued message there, its internal read pointer ends up
+  mid-frame and every later read starts inside a message, so the
+  header's identity byte never lands on a known value again — exactly
+  the other=100 %-from-the-first-poll / zero-events signature the
+  2026-11-18 and 2026-11-19 captures showed, and the intermittent
+  history (sessions 1–2's occasional valid frames = lucky realignment
+  when a read drained the queue onto a boundary) fits the same story.
+  Boot always passed because the acknowledge path reads exactly
+  26 bytes. Parts (all in `arduino/Skywriter/`):
+  - `poll()` requests EXACTLY `SW_FIRST_READ_SIZE` (26) bytes first; a
+    frame whose Size field (byte 0, validated 4 ≤ size ≤ 132 — the
+    longest real message; the protocol cap is 255 but no sensor message
+    exceeds Fw_Version_Info's 132) announces a longer message is fetched
+    with continuation reads capped at `SW_I2C_READ_CHUNK` (32) and
+    bounded by the Size, while the transfer (TS) line is still asserted
+    — the Python driver's P3.11c pattern; the 132-byte Fw_Version_Info
+    frame arrives as 26 + 32 + 32 + 32 + 10. P3.11b's GOAL (the whole
+    120-byte version string) survives through those continuations; its
+    single-132-byte-request MECHANISM is what this item removed, and
+    with it H7's over-read.
+  - Dispatch only complete frames: a corrupt Size (under 4, above 132)
+    or a continuation that serves nothing means the frame is skipped —
+    never decoded half-read (the Python driver's empty-continuation
+    rule). The payload copy is Size-bounded, so bus padding or an
+    over-answering read never reaches a decoder (the same rule as
+    P3.11c), and the receive buffer is drained after every transfer so
+    the next requestFrom starts clean on every Wire implementation, not
+    only the ones that reset it themselves.
+  - The P3.23 release rule (transfer line let go, pull-up restored)
+    stands on every exit path, including the two new ones (corrupt
+    Size, incomplete frame) — pinned by the new tests.
+  - Test-first discipline held: the Wire host shim
+    (`tests/cpp/Wire.h` + `arduino_shim.cpp`) now models the sensor
+    continuing its buffer across the reads of one asserted transfer
+    (the P3.11c contract the sized reads rely on) and records every
+    requestFrom call; the new host binary `tests/cpp/
+    host_read_pattern_main.cpp` + `tests/test_driver_read_pattern.py`
+    drive the REAL driver through its genuine `poll()` and pin the
+    pattern: one 26-byte request for the classic frame (never the old
+    132), no continuation for a 14-byte frame, the exact
+    26,32,32,32,10 chase for the recorded 132-byte F17 fixture, no
+    dispatch of incomplete or corrupt-Size frames, the release pair on
+    every new exit path, and closed transfer accounting (short +
+    sensor + status + fw + other = every transfer). Verified FAILING
+    against the pre-P3.25 code first (8 of the 10 — the old single
+    132-byte request, no continuations, no snapshot; the short-read and
+    accounting cases were already true then and stayed green), green
+    after the rewrite.
+  - Honest scope note, as the item itself assigns: whether the real
+    sensor continues its I2C buffer across the separate reads of one
+    asserted transfer is a P4.1 hardware check against this build — the
+    offline harness proves the driver-side arithmetic only (the same
+    caveat the P3.11c entry recorded for the Python driver).
+- P3.24 — the unknown-frame snapshot exists (commit `2267497`): whenever
+  a transfer read a header but did NOT dispatch, the driver stores
+  public state — the first 8 frame bytes (size, flags, sequence,
+  identity + 4 payload bytes) and the byte count the reads actually
+  returned (the `Wire.requestFrom` counts the old code ignored
+  entirely) — and the firmware's health line prints them once per line
+  as `other_snap=` (colon-separated zero-padded hex) and `other_read=`,
+  right after the `other=` counter they explain. The 200 Hz hot path
+  only stores; nothing prints inside `poll()`.
+  - Scope decision recorded (a deliberate superset of the item's
+    letter): the item says "when a frame's identity byte is not
+    0x91/0x15/0x83" — written against the OLD read pattern, where
+    every poll reached the identity switch. With P3.25's Size
+    validation in place, an identity-only snapshot would be blind to
+    corrupt-Size frames — exactly the frames H7 misalignment produces
+    (a mid-frame Size byte is garbage too). The snapshot therefore
+    fires on EVERY undispatched frame that produced a header: unknown
+    identity, corrupt Size, or incomplete. Each self-identifies in the
+    content, matching the item's predictions: a 0x91 identity visible
+    at a SHIFTED offset = the mid-frame misalignment (H7); all 0x00 =
+    the bus answers padding on reads with nothing queued (then hunt the
+    transfer-line short — the HW report's supply-wire discriminator
+    settles it); all 0xFF = a wedged slave (power-cycle the sensor and
+    retest); a KNOWN identity with the read count under the promised
+    Size = an incomplete read (the P4.1 continuation question).
+  - `frames_other` counts them all, so the health line's accounting
+    closes: short + sensor + status + fw + other = every transfer
+    started — nothing silently disappears into an unnamed bucket, which
+    is what made the 100 % "other" capture uninterpretable in the
+    first place.
+  - Pinned by `tests/test_driver_read_pattern.py` (snapshot content for
+    each undispatched shape — shifted identity, all-zero padding,
+    over-long Size, truncated frame; latest-wins; dispatched frames
+    never touch it; short reads never touch it; the actual-read-count
+    evidence) and `tests/test_firmware_sketch.py` (the health-line
+    print: both fields, the zero-padded hex format, placement with the
+    other= counter).
+- W8 — ledger housekeeping done (commit `1c8bbb2`): (a) the P3.17b Done
+  entry's "commit `<HASH>`" placeholder is now the real hash `5553de4`
+  (the loop's automatic-snapshot commit, which carried the
+  otherwise-uncommitted P3.17b work — found via `git log -S
+  "FLASH-BACKED"`); (b) the duplicated P3.1 entry and "Environment note
+  discovered by P3.1" at the bottom of the Done section were removed
+  (one copy of each remains — the earlier copy, whose wording matches
+  the current harness: `tests/build/` is covered by the tree-wide
+  `build/` .gitignore rule); (c) verified no `<HASH>` placeholder
+  remains in this file and `bash run_tests.sh` stayed green.
+- P3.23 — the Arduino driver always releases the sensor's transfer line
+  (commit `1c8bbb2`). In plain language: the sensor says "new data is
+  waiting" by pulling its data-ready wire low; the driver holds that wire
+  low while it clocks the data over the I2C bus, and MUST let go
+  afterwards or the sensor's buffers stay locked — the sensor goes
+  silent forever while the Bluetooth link and serial console look
+  perfectly normal (the leading suspect for hardware session 3's total
+  input loss, P4.0a hypothesis H1). The Python driver had exactly this
+  defect and got the fix in P3.11d; the Arduino driver now has it too:
+  the failed-read early return (fewer than the 4 header bytes) releases
+  the transfer (TS) line before returning, instead of stranding it LOW.
+  Second half (H2, the reopened P3.19 pin-mode decision — outcome
+  recorded): the release now RESTORES the pin's internal pull-up on
+  every exit path (`pinMode(xfer, INPUT_PULLUP)`, as the Python driver's
+  release does), so a loose or disconnected TS wire reads consistently
+  high instead of at random (a random low read would trigger the
+  failed-read path continuously). The old plain-INPUT release is gone
+  from both the driver and the sketch's acknowledge path; the AGENTS.md
+  gotcha that documented the quirk was updated with a dated note.
+  Test-first discipline held: the shims (`tests/cpp/Arduino.h` +
+  `arduino_shim.cpp`) now RECORD every `pinMode`/`digitalWrite` call,
+  the new host program `tests/cpp/host_pin_release_main.cpp` drives the
+  REAL driver through its genuine `poll()` on both paths (normal F01
+  frame; empty/failed read), and `tests/test_driver_ts_pin.py` asserts
+  every poll ends with the release pair (line driven high, then
+  INPUT_PULLUP) — verified FAILING on the pre-fix code (3 failures)
+  and PASSING after. No public callbacks or frame decoding changed; all
+  three shared examples still compile (run_tests.sh green 4/4).
+  Decision note: no `specs/README.md` deviation row was added — no
+  sentence in `specs/` pins the release pin mode (checked first). If
+  P3.22 shows many short reads on hardware, a bounded retry inside
+  `poll()` (as the boot path already has) becomes a separate item.
+- P3.22 — the health counters are live (commit `1c8bbb2`), the hardware
+  gate P4.0a's main instrument (with no oscilloscope or logic analyser,
+  these counters are the only view of the transfer line and the failed
+  reads over time):
+  - **Shared library (`arduino/Skywriter/`) public state** (so the
+    examples keep compiling): `polls` (every `poll()` call),
+    `ts_low_polls` (polls where the data-ready line read LOW — a real
+    transfer), `short_reads` (transfers whose read returned fewer than
+    the 4 header bytes — the H1 path) and frames by message identity
+    (`frames_sensor_data` 0x91, `frames_status` 0x15, `frames_firmware`
+    0x83, `frames_other`). Increment only — the 200 Hz hot path never
+    prints.
+  - **Sketch counters** (`SkywriterController.ino`): dispatched sensor
+    events (`ev_position`/`ev_touch`/`ev_gesture`/`ev_airwheel`, counted
+    after the unconnected drop gate), `ev_dropped` (events dropped while
+    unconnected — the H6 probe's number), HID reports by kind counted at
+    the radio call sites (`hid_pointer`/`hid_button`/`hid_wheel`/
+    `hid_key`/`hid_media` — a click counts 2 button transitions, the
+    scheduled tap pulses included), and Bluetooth link life cycle
+    (`ble_connects`/`ble_disconnects` — the F4 duplicate-connect
+    question's number).
+  - **The status line**: once every `HEALTH_INTERVAL_MS` = 2000 ms from
+    `loop()`, one grep-friendly `SKYSTATE health` line with uptime (a
+    board reset shows as uptime dropping to zero) and the two shares
+    ALREADY DIVIDED OUT — short reads and TS-low polls as a percentage
+    of all polls — per the P4.0a T5 requirement ("visible without
+    arithmetic"). Restart-vs-stall is now decidable from the counter
+    shapes (see the F6 outcome note in the status snapshot).
+  - Pins: `test_health_status_line_printed_every_two_seconds` (every
+    counter named in the line, the 2 s gate guards the print) and
+    `test_the_200hz_sensor_path_never_prints` in
+    `tests/test_firmware_sketch.py`. Verified: `bash run_tests.sh` green
+    4/4; sketch compiles (22 % flash / 34 % RAM).
+- P3.21 — taps no longer type letters (commit `1c8bbb2`): the two
+  traced causes are both fixed, spec and code together.
+  (1) **Wrong usage numbers**: the USB HID Usage Tables keyboard page
+  gives Page Up = 0x4B (75) and Page Down = 0x4E (78); 0x4F (79) is
+  Right Arrow. `HID_USAGE_PAGE_UP`/`HID_USAGE_PAGE_DOWN` in
+  `SkywriterHIDMapper.h` are now 75/78 with the dated revision note
+  (cross-checked against the core's key table: `KEY_PAGE_UP` 0xD3 =
+  136 + 75, `KEY_PAGE_DOWN` 0xD6 = 136 + 78). Every place quoting
+  78/79 was updated: `specs/hid_mapping.md` §6 (new keyboard-usage
+  revision note — a spec-data bug, NOT a driver deviation, so no
+  `specs/README.md` row), `specs/fixtures/manifest.json` (top note +
+  `tap_north`/`tap_south` expectations now usage 75/78 with per-scenario
+  notes), `tests/hid_grammar.py` (`KEYBOARD_KEYS` + docstring),
+  `tests/adapters_mapping.py` (`_KEYBOARD_KEY_BY_USAGE`),
+  `tests/test_mapper_unit.py`, `tests/cpp/host_mapping_main.cpp`.
+  (2) **Wrong call path**: `pulse_fire()`'s keyboard case now sends
+  `usage + KEYBOARD_NON_PRINTING_OFFSET` (136) to
+  `KeyboardBLE.press()`/`release()` on BOTH press and release — the
+  core treats values 0–127 as ASCII characters (usage 78 typed "N" on
+  hardware, sessions 1 and 2026-11-17) and only 136+ as non-printing
+  keys. The conversion happens exactly once (in `pulse_fire`; the sink's
+  `keyboardPress` keeps the RAW usage — pinned), so the old raw path is
+  unreachable. New pins: `test_keyboard_usages_corrected_to_75_and_78`
+  and `test_no_raw_keyboard_usage_reaches_press_or_release` (asserts
+  every keyboard call site applies the offset and the known-bad shapes
+  cannot return). Side benefit for F5: `press()`'s ASCII path can only
+  add Shift/AltGr modifiers — Ctrl+A was never producible from this
+  path, and after this fix no raw usage reaches it at all. Verified:
+  `bash run_tests.sh` green 4/4; 110 pytest tests.
 - P3.20 — the hardware gate fired (this commit): with 3a–3e complete and
   every remaining Phase-3 item closed, the `READY_FOR_HW` marker is written
   in the repository root (gitignored, never committed) listing exactly what
@@ -550,7 +1299,9 @@ attribute table limit).
   34 % RAM — unchanged, the handler is small).
 
 - P3.17b — the pairing-bond persistence question is resolved (commit
-  `<HASH>`), and the resolution **refutes** P3.17's RAM-only assumption — a
+  `5553de4` — the loop's automatic snapshot commit, which carried the
+  otherwise-uncommitted P3.17b work), and the resolution **refutes** P3.17's
+  RAM-only assumption — a
   genuinely wrong belief in the ledger that the hardware loop was about to
   inherit. In plain language: when a phone or computer "pairs" (establishes
   a trusted wireless relationship) with the controller and later pairs
@@ -1644,49 +2395,3 @@ attribute table limit).
   should either merge `ralph-dry-run` into `pico-ble` when the dry-run
   phase is complete, or run
   `git push --set-upstream origin ralph-dry-run` once.
-- P3.1 — fixture-replay harness skeleton landed (this commit): `tests/` is a
-  pytest package picked up automatically by `run_tests.sh`'s existing
-  `fixture_replay` check. Parts (see `tests/README.md` for the full map):
-  - `runner.py` — driver-agnostic runner: manifest scenario → frames replayed
-    in order into a **fresh decoder state**; `time_gap_ms` is applied on a
-    **VirtualClock** (`virtual_clock.py`) with zero wall-clock sleeping, once
-    between consecutive frames and once after the last frame so a later
-    mapping adapter can evaluate timed outcomes (release-by-silence).
-  - `adapters_python.py` — Python driver adapter: imports
-    `library/skywriter/__init__.py` with mocked hardware (same verification as
-    `library/test.py`), registers capture handlers on the driver's own
-    callback globals (bypassing `setup()` so no bus thread starts), mirrors
-    `_do_poll`'s message-ID dispatch and feeds the **payload** (frame minus
-    the 4-byte header) per the manifest convention, then records whatever the
-    decoder emits. The driver's wall-clock `millis()` is redirected onto the
-    VirtualClock so touch repeat-limiting is simulated time.
-  - `adapters_cpp.py` + `cpp/` — C++ decoder adapter: the *real* Arduino
-    driver (`arduino/Skywriter/skywriter.cpp`) compiled as a host program
-    behind minimal `Arduino.h`/`Wire.h` shims (`tests/cpp/`), driven through
-    its genuine `poll()` code path once per fed frame. One process per
-    scenario keeps decoder state fresh; the binary is hash-cached in
-    `tests/build/` (gitignored) so repeated runs don't recompile.
-  - `test_harness.py` — 11 meta-tests: manifest/frame integrity, every
-    scenario replays on both adapters, fresh-state identity on reruns,
-    simulated-gap accounting, VirtualClock non-sleeping, plus today-true
-    plumbing pins (F01 position values on both drivers, flick W→E dispatch,
-    tap dispatch). Assertions deliberately cover only behaviour that already
-    matches the spec — per-scenario spec assertions (AC-MAP-01…06) land with
-    P3.2 + the decoder fixes P3.3–P3.11, keeping `run_tests.sh` red→green
-    per fix, never red-by-design.
-- Environment note discovered by P3.1 (this commit): the Alpine container has
-  **no host C++ compiler and no sudo/root** (`g++`, `clang++`, apk tools all
-  absent — only the ARM cross-compiler inside the rp2040 arduino core is
-  shipped, which cannot build host binaries). Resolved without root:
-  `pip install --user --break-system-packages ziglang` — the `ziglang` PyPI
-  wheel is a complete C++ toolchain (`python3 -m ziglang c++ …`) and works on
-  this musl image (verified: compiled a test binary, exit code checked).
-  `tests/adapters_cpp.py` resolves the compiler as `g++`/`c++` → `zig` on
-  PATH → `python3 -m ziglang c++`, and fails loudly with install instructions
-  if none is found (never a silent skip). The Dockerfile now also installs
-  `g++ musl-dev` for future image rebuilds; **not yet verified by an actual
-  image rebuild** (docker is host-only) — spread this verification to the
-  next host-side docker-touching session. The pip ziglang install is
-  user-local and dies with the current container; until the image is
-  rebuilt, a fresh container needs the `pip install` above before
-  `run_tests.sh`.

@@ -6,8 +6,24 @@
 
 int g_digital_read_value = 1;
 
-void pinMode(uint8_t, uint8_t) {}
-void digitalWrite(uint8_t, uint8_t) {}
+std::vector<PinAction> g_pin_actions;
+
+void g_pin_actions_clear() {
+  g_pin_actions.clear();
+}
+
+std::vector<RequestAction> g_request_actions;
+
+void g_request_actions_clear() {
+  g_request_actions.clear();
+}
+
+void pinMode(uint8_t pin, uint8_t mode) {
+  g_pin_actions.push_back({0, pin, mode});
+}
+void digitalWrite(uint8_t pin, uint8_t val) {
+  g_pin_actions.push_back({1, pin, val});
+}
 int digitalRead(uint8_t) {
   return g_digital_read_value;
 }
@@ -18,9 +34,17 @@ void WireClass::begin() {
 }
 
 uint8_t WireClass::requestFrom(uint8_t, uint8_t qty) {
-  cursor_ = 0;
-  served_ = (qty < len_) ? qty : static_cast<uint8_t>(len_);
-  return served_;
+  // The "sensor" continues serving its buffer across the reads of one
+  // asserted transfer (the P3.11c/P3.25 continuation model): this request
+  // serves the next `qty` bytes from the current position. `cursor_` only
+  // advances through read() (bytes the driver actually consumed), while
+  // `served_` marks the readable end of this request — exactly the
+  // available()/read() shape the real Wire API presents after a request.
+  size_t remaining = (len_ > cursor_) ? len_ - cursor_ : 0;
+  uint8_t served = (qty < remaining) ? qty : static_cast<uint8_t>(remaining);
+  served_ = static_cast<uint8_t>(cursor_ + served);
+  g_request_actions.push_back({qty, served});
+  return served;
 }
 
 uint8_t WireClass::available() {

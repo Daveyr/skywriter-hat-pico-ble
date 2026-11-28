@@ -4,7 +4,8 @@
  "notes": [
   "v2 (P3.2): expectations are machine-checkable. expect.canonical holds the event list in the tests/canonical.py grammar (the vocabulary of hid_mapping.md \u00a72); expect.hid holds the scenario's HID output as hid_grammar.py records. Prose remains only in frame desc/source and scenario note fields.",
   "Canonical annotations on expectation entries: omit_pending {deviation, drivers} means those drivers may omit the event while that specs/README.md deviation row is open (the annotation must be dropped when the row is fixed); keys_pending {deviation, keys, drivers} means the named event keys may be absent from those drivers' records while the row is open.",
-  "Gesture class is the wire value of GestureInfo bits 12-15 (0 garbage, 1 flick, 2 circle); edge is GestureInfo bit 16. Consumer usages are decimal usage IDs: Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Inc 0x00E9=233, Volume Dec 0x00EA=234. Page Up 0x4E=78, Page Down 0x4F=79.",
+  "Gesture class is the wire value of GestureInfo bits 12-15 (0 garbage, 1 flick, 2 circle); edge is GestureInfo bit 16. Consumer usages are decimal usage IDs: Next Track 0x00B5=181, Previous Track 0x00B6=182, Volume Inc 0x00E9=233, Volume Dec 0x00EA=234. Page Up 0x4B=75, Page Down 0x4E=78 (see the P3.21 revision note below).",
+  "2026-11-17 revision (P3.21, hardware session 1: taps typed letters): the keyboard usage numbers quoted before this note were WRONG and are corrected everywhere (spec §6 note, mapper constants, this manifest, the harness grammar) — the USB HID Usage Tables keyboard page gives Page Up 0x4B=75 and Page Down 0x4E=78 (0x4F=79 is Right Arrow; the core key table cross-check: KEY_PAGE_UP 0xD3=136+75, KEY_PAGE_DOWN 0xD6=136+78). tap_north's usage is now 75 and tap_south's 78. Separately, the firmware sink must send keyboard usages to the Bluetooth keyboard library in the core's non-printing range (usage+136) — press() treats 0-127 as ASCII characters, which is how a north tap typed the letter N; the canonical records in this manifest stay RAW usages.",
   "Python expectations assume the decoder receives the message payload (frame[4:]) \u2014 the harness feeds it that way, and the driver's _do_poll strips the 4-byte header at dispatch (P3.3). Positions in canonical form are raw 16-bit units; the Python decoders' \u00b14-unit rounding tolerance is documented in tests/canonical.py.",
   "Arduino touch codes: 0-4 doubletap center/south/east/west/north order per skywriter.h SW_* constants (SW_DOUBLETAP_CENTER=0 ... SW_TOUCH_SOUTH=14).",
   "Reserved bits are kept as vendor wrote them where source=vendor; decoders must ignore them.",
@@ -769,11 +770,11 @@
       "channel": "keyboard",
       "action": "press",
       "key": "page_up",
-      "usage": 78
+      "usage": 75
      }
     ]
    },
-   "note": "\u00a76 \"tap(north) \u2192 Keyboard Page Up\": the action goes on the KEYBOARD report, not the mouse report \u2014 nothing is emitted on a wrong channel (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+   "note": "\u00a76 \"tap(north) \u2192 Keyboard Page Up\": the action goes on the KEYBOARD report, not the mouse report \u2014 nothing is emitted on a wrong channel (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]. Usage corrected 78 \u2192 75 on 2026-11-17 (P3.21 \u2014 the old value typed the letter N on hardware; see the manifest revision note)."
   },
   {
    "name": "tap_south",
@@ -792,11 +793,11 @@
       "channel": "keyboard",
       "action": "press",
       "key": "page_down",
-      "usage": 79
+      "usage": 78
      }
     ]
    },
-   "note": "\u00a76 \"tap(south) \u2192 Keyboard Page Down\": the Page Up row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]."
+   "note": "\u00a76 \"tap(south) \u2192 Keyboard Page Down\": the Page Up row's opposite-signed twin (fixture-corpus gap fill, P3.15b) [AC-MAP-03, AC-MAP-08's channel separation]. Usage corrected 79 \u2192 78 on 2026-11-17 (P3.21; see the manifest revision note)."
   },
   {
    "name": "doubletap_east_west_reserved",

@@ -25,7 +25,8 @@
 //   HID BUTTON <left|middle|right> <down|up>
 //   HID WHEEL <notches>           + = scroll up (away from the user)
 //   HID CLICK <button> <count> <click_ms>
-//   HID KEY <usage78|79>          keyboard press (Page Up 78 / Page Down 79)
+//   HID KEY <usage75|78>          keyboard press (Page Up 75 / Page Down 78,
+//                                 raw USB usages — P3.21)
 //   HID CONSUME <usage>           consumer-control press (decimal USB usage)
 //
 // One process per replayed scenario keeps decoder state (touch bits, wheel

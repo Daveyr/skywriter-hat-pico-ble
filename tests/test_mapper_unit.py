@@ -255,16 +255,18 @@ def _consume(usage):
 
 def test_tap_north_south_are_page_up_page_down():
     '''§6 rows: tap(north) → keyboard Page Up, tap(south) → Page Down
-    (usage 0x4E = 78 / 0x4F = 79, on the keyboard report — hid_grammar
-    pins the usage↔key correspondence; _key carries the raw usage).'''
+    (usage 0x4B = 75 / 0x4E = 78 after the P3.21 correction — the old
+    78/79 were Right Arrow's page and worse, typed letters on hardware; on
+    the keyboard report — hid_grammar pins the usage↔key correspondence;
+    _key carries the raw usage).'''
     records = _run([
         ('TOUCH north tap', 0),
         ('TOUCH south tap', 5),
         ('TICK', 1000),
     ])
     assert records == [
-        _key(78),   # HID_USAGE_PAGE_UP
-        _key(79),   # HID_USAGE_PAGE_DOWN
+        _key(75),   # HID_USAGE_PAGE_UP
+        _key(78),   # HID_USAGE_PAGE_DOWN
     ], records
 
 

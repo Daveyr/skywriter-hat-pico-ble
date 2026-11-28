@@ -54,7 +54,7 @@ _TIMEOUT_RUN = 30
 # exercised at the sensor's own resolution.
 FRAME_PERIOD_MS = 5
 
-_KEYBOARD_KEY_BY_USAGE = {78: 'page_up', 79: 'page_down'}
+_KEYBOARD_KEY_BY_USAGE = {75: 'page_up', 78: 'page_down'}
 
 
 def build_host_mapping():

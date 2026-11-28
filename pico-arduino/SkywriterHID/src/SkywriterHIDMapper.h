@@ -56,10 +56,17 @@ enum HIDButton : uint8_t {
 };
 
 // USB HID usage codes for the keyboard rows of §6 (Page Up / Page Down):
-// Page Up = 0x4E (78), Page Down = 0x4F (79). (The §6 keyboard rows use
-// these from the §6 table below.)
-static const uint8_t HID_USAGE_PAGE_UP = 78;
-static const uint8_t HID_USAGE_PAGE_DOWN = 79;
+// Page Up = 0x4B (75), Page Down = 0x4E (78). Revision note (fix item
+// P3.21, 2026-11-17, hardware session 1: taps typed letters): the previous
+// values 78/79 were wrong — 0x4F (79) is Right Arrow; the correct codes
+// were cross-checked against the USB HID Usage Tables keyboard page and
+// against the Arduino BLE core's own key table (KEY_PAGE_UP = 0xD3 =
+// 136 + 75, KEY_PAGE_DOWN = 0xD6 = 136 + 78). These are the RAW usage
+// codes: the firmware sink must pass them to the Bluetooth keyboard
+// library in the non-printing range (usage + 136) — see the sink comment.
+// (The §6 keyboard rows use these from the §6 table below.)
+static const uint8_t HID_USAGE_PAGE_UP = 75;
+static const uint8_t HID_USAGE_PAGE_DOWN = 78;
 
 // USB HID usage codes for the consumer-control (media) rows of §6,
 // decimal: Scan Next Track = 0x00B5 (181), Scan Previous Track =
@@ -94,7 +101,9 @@ class HIDMapperSink {
   // press and release must never straddle a coalesced period.
   virtual void mouseClick(uint8_t button, uint8_t count) = 0;
 
-  // §6: a keyboard-report press (usage 78 = Page Up, 79 = Page Down).
+  // §6: a keyboard-report press (raw usage 75 = Page Up, 78 = Page Down
+  // after the P3.21 correction; the firmware sink adds the non-printing
+  // range offset before calling the Bluetooth keyboard library).
   virtual void keyboardPress(uint8_t usage) = 0;
 
   // §6: a consumer-control report press (usage e.g. 0x00B5 = 181 next track).

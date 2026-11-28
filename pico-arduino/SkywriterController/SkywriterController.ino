@@ -18,7 +18,19 @@
     with a mouse.
   * On the console: mount the Pico W via its USB serial port and you can
     watch `SKYSTATE` lines describing bring-up progress (the hardware probe
-    P4.1 asserts on these lines).
+    P4.1 asserts on these lines). Since fix item P3.22 a `SKYSTATE health`
+    status line prints every 2 s with the driver's I2C read counters (short
+    reads and transfer-line-low polls as shares of all polls), frames by
+    message type, dispatched/dropped sensor events, HID reports by kind and
+    Bluetooth connects/disconnects — the hardware gate P4.0a's main
+    instrument. Since fix item P3.24 the health line also prints the
+    latest undispatched frame's first 8 bytes and actual read count
+    (`other_snap=` / `other_read=`) — the evidence that names what the
+    "other" frames contain. And since fix item P3.25 the driver reads
+    exactly the classic 26-byte sensor frame first and only fetches more
+    when the frame's own Size field says the message is longer (never the
+    old single 132-byte over-read that desynchronised the sensor's
+    message framing).
 
   Radio profile: specs/ble_hid.md §3–§4. This sketch implements:
   - AC-BLE-01 — the device advertises as `Skywriter HID` (the name is
@@ -171,8 +183,11 @@ static bool sensor_wait_system_status(unsigned char msg_id) {
     // Drain any remaining bytes so the bus starts clean next attempt.
     while (Wire.available()) Wire.read();
 
+    // Release the transfer line with its pull-up restored (fix item
+    // P3.23, hypothesis H2 — same rule as the driver's poll() release):
+    // a loose or disconnected TS wire must read consistently high.
     digitalWrite(SKYWRITER_PIN_TS, HIGH);
-    pinMode(SKYWRITER_PIN_TS, INPUT);
+    pinMode(SKYWRITER_PIN_TS, INPUT_PULLUP);
     if (ok) return true;
   }
   return false;
@@ -214,6 +229,114 @@ static void configure_sensor() {
 }
 
 // ---------------------------------------------------------------------------
+// Health counters (fix item P3.22; the instrument the hardware gate P4.0a
+// needs — with no oscilloscope or logic analyser, these counters are the
+// only view of the transfer line and the failed reads over time)
+//
+// The sensor-side read counters (polls, transfer-line-low polls, short
+// reads, frames by message type) live in the shared driver library as
+// public state (`Skywriter.polls` etc. — see arduino/Skywriter/skywriter.h),
+// so the examples keep compiling. The sketch owns the event/report/link
+// counters below. The 200 Hz sensor path only increments counters; it
+// never prints — the status line prints once every HEALTH_INTERVAL_MS
+// from loop().
+// ---------------------------------------------------------------------------
+
+static const unsigned long HEALTH_INTERVAL_MS = 2000;
+static unsigned long health_last_ms = 0;
+
+// Sensor events, as dispatched into the mapping engine (after the
+// unconnected drop gate) and as dropped while unconnected.
+static unsigned long ev_position = 0;
+static unsigned long ev_touch = 0;
+static unsigned long ev_gesture = 0;
+static unsigned long ev_airwheel = 0;
+static unsigned long ev_dropped = 0;
+
+// HID reports sent, by kind — counted at the radio call sites (the real
+// sends: MouseBLE / KeyboardBLE), not at the mapper's abstract calls.
+// pointer = mouse move reports; button = press/release transitions (taps'
+// scheduled pulses included, so a click counts 2); wheel = scroll notches;
+// key = keyboard press/release transitions; media = consumer-control
+// press/release transitions.
+static unsigned long hid_pointer = 0;
+static unsigned long hid_button = 0;
+static unsigned long hid_wheel = 0;
+static unsigned long hid_key = 0;
+static unsigned long hid_media = 0;
+
+// Bluetooth link life cycle counters.
+static unsigned long ble_connects = 0;
+static unsigned long ble_disconnects = 0;
+
+static void print_health_status(unsigned long now_ms) {
+  Serial.print("SKYSTATE health uptime_ms=");
+  Serial.print(now_ms);
+  // Shares are printed so they are visible without arithmetic (P4.0a T5).
+  // A division by zero is impossible once polls > 0; a 0 poll count (never
+  // reached in a live loop) prints 0.00%.
+  float poll_div = (Skywriter.polls > 0) ? (float)Skywriter.polls : 1.0f;
+  Serial.print(" polls=");
+  Serial.print(Skywriter.polls);
+  Serial.print(" ts_low=");
+  Serial.print(Skywriter.ts_low_polls);
+  Serial.print('(');
+  Serial.print(100.0f * (float)Skywriter.ts_low_polls / poll_div, 2);
+  Serial.print("%) short_reads=");
+  Serial.print(Skywriter.short_reads);
+  Serial.print('(');
+  Serial.print(100.0f * (float)Skywriter.short_reads / poll_div, 2);
+  Serial.print("%) frames sensor=");
+  Serial.print(Skywriter.frames_sensor_data);
+  Serial.print(" status=");
+  Serial.print(Skywriter.frames_status);
+  Serial.print(" fw=");
+  Serial.print(Skywriter.frames_firmware);
+  Serial.print(" other=");
+  Serial.print(Skywriter.frames_other);
+  // P3.24: the latest undispatched frame's content — the evidence that
+  // names WHAT the "other" frames are. A 0x91 identity visible at a
+  // shifted offset = the sensor's message framing is misaligned (the
+  // over-read fault, P4.0a H7); all 0x00 = the bus answers padding on
+  // reads with nothing queued (then hunt a transfer-line short);
+  // all 0xFF = a wedged slave (power-cycle the sensor); a known identity
+  // with the read count under the promised Size = an incomplete read.
+  // Zeros with other=0 mean no such frame has been seen since boot.
+  Serial.print(" other_snap=");
+  for (unsigned char i = 0; i < 8; i++) {
+    if (i) Serial.print(':');
+    if (Skywriter.other_snapshot[i] < 0x10) Serial.print('0');
+    Serial.print(Skywriter.other_snapshot[i], HEX);
+  }
+  Serial.print(" other_read=");
+  Serial.print(Skywriter.other_snapshot_read);
+  Serial.print(" events pos=");
+  Serial.print(ev_position);
+  Serial.print(" touch=");
+  Serial.print(ev_touch);
+  Serial.print(" gest=");
+  Serial.print(ev_gesture);
+  Serial.print(" wheel=");
+  Serial.print(ev_airwheel);
+  Serial.print(" dropped=");
+  Serial.print(ev_dropped);
+  Serial.print(" hid pointer=");
+  Serial.print(hid_pointer);
+  Serial.print(" button=");
+  Serial.print(hid_button);
+  Serial.print(" wheel=");
+  Serial.print(hid_wheel);
+  Serial.print(" key=");
+  Serial.print(hid_key);
+  Serial.print(" media=");
+  Serial.print(hid_media);
+  Serial.print(" ble conn=");
+  Serial.print(ble_connects);
+  Serial.print(" disc=");
+  Serial.println(ble_disconnects);
+}
+
+// ---------------------------------------------------------------------------
 // The HID actions → BLE HID bridge
 //
 // The mapping engine (`SkywriterHIDMapper`) calls the sink's methods; the
@@ -226,6 +349,16 @@ static void configure_sensor() {
 //     (`startHID` runs inside either `begin()`), so setup() runs exactly one
 //     of them — AC-BLE-02.
 // ---------------------------------------------------------------------------
+
+// One keyboard usage code must be sent to the Bluetooth keyboard library in
+// the core's NON-PRINTING range: `KeyboardBLE.press(uint8_t)` treats values
+// 0-127 as ASCII characters (raw Page Up usage 78 typed the letter "N" —
+// hardware session 1, fix item P3.21) and values 136 and up as non-printing
+// keys, subtracting 136 to get the usage. The core's own key table confirms
+// the offset: KEY_PAGE_UP = 0xD3 = 136 + 75, KEY_PAGE_DOWN = 0xD6 = 136 + 78.
+// Every keyboard press AND release goes through this conversion — never send
+// a raw §6 usage to press()/release().
+static const uint8_t KEYBOARD_NON_PRINTING_OFFSET = 136;
 
 // One-shot HID pulses: taps, doubletaps, keyboard keys and media keys are
 // press → wait → release sequences that must never be coalesced away
@@ -275,14 +408,20 @@ static void pulse_fire(uint8_t kind, bool down, uint8_t button,
                        uint16_t usage) {
   switch (kind) {
     case PULSE_BUTTON:
+      hid_button++;
       if (down) MouseBLE.press(button);
       else MouseBLE.release(button);
       break;
     case PULSE_KEY:
-      if (down) KeyboardBLE.press((uint8_t)usage);
-      else KeyboardBLE.release((uint8_t)usage);
+      // The mapper hands over the RAW USB usage (75 = Page Up, 78 = Page
+      // Down, P3.21); the non-printing-range conversion happens HERE, once,
+      // for both press and release — a raw usage would be typed as a letter.
+      hid_key++;
+      if (down) KeyboardBLE.press((uint8_t)(usage + KEYBOARD_NON_PRINTING_OFFSET));
+      else KeyboardBLE.release((uint8_t)(usage + KEYBOARD_NON_PRINTING_OFFSET));
       break;
     case PULSE_CONSUMER:
+      hid_media++;
       if (down) KeyboardBLE.consumerPress(usage);
       else KeyboardBLE.consumerRelease();
       break;
@@ -321,6 +460,7 @@ class BLEHIDSink : public HIDMapperSink {
   void mouseMove(int16_t dx, int16_t dy) override {
     carry_x_ += dx;
     carry_y_ += dy;
+    hid_pointer++;
     MouseBLE.move(drain_carry(carry_x_), drain_carry(carry_y_), 0);
   }
 
@@ -328,6 +468,7 @@ class BLEHIDSink : public HIDMapperSink {
   // The mouse's own button bits persist, so every later pointer report
   // carries the held state — the host state machine stays in step (§3).
   void mouseButton(uint8_t button, bool down) override {
+    hid_button++;
     if (down) MouseBLE.press(hid_button_bits(button));
     else MouseBLE.release(hid_button_bits(button));
   }
@@ -335,6 +476,7 @@ class BLEHIDSink : public HIDMapperSink {
   // §5: wheel notches, emitted immediately by the mapper (scroll is
   // latency-sensitive — deliberately never coalesced, unlike §3 moves).
   void mouseWheel(int8_t notches) override {
+    hid_wheel++;
     MouseBLE.move(0, 0, notches);
   }
 
@@ -354,9 +496,10 @@ class BLEHIDSink : public HIDMapperSink {
     }
   }
 
-  // §6: keyboard keys (tap(north) → Page Up 78, tap(south) → Page Down 79):
-  // one press + release pair per tap event, with the same click timing as
-  // the pointer taps.
+  // §6: keyboard keys (tap(north) → Page Up 75, tap(south) → Page Down 78 —
+  // corrected from 78/79 by P3.21): one press + release pair per tap event,
+  // with the same click timing as the pointer taps. The usage stays RAW
+  // here; pulse_fire applies the core's non-printing range offset.
   void keyboardPress(uint8_t usage) override {
     pulse_enqueue(PULSE_KEY, true, millis(), 0, usage);
     pulse_enqueue(PULSE_KEY, false,
@@ -470,34 +613,42 @@ static void sensor_drop_notice() {
 
 static void on_sensor_xyz(unsigned int x, unsigned int y, unsigned int z) {
   if (!ble_link_open()) {
+    ev_dropped++;
     sensor_drop_notice();
     return;  // §6 Unconnected: dropped, not queued
   }
+  ev_position++;
   mapper.onPosition((uint16_t)x, (uint16_t)y, (uint16_t)z, millis());
 }
 
 static void on_sensor_touch(unsigned char code) {
   if (!ble_link_open()) {
+    ev_dropped++;
     sensor_drop_notice();
     return;
   }
+  ev_touch++;
   mapper.onTouch(zone_for_touch_code(code), kind_for_touch_code(code),
                  millis());
 }
 
 static void on_sensor_gesture(unsigned char gesture) {
   if (!ble_link_open()) {
+    ev_dropped++;
     sensor_drop_notice();
     return;
   }
+  ev_gesture++;
   mapper.onGesture(gesture, millis());
 }
 
 static void on_sensor_airwheel(float degrees) {
   if (!ble_link_open()) {
+    ev_dropped++;
     sensor_drop_notice();
     return;
   }
+  ev_airwheel++;
   mapper.onAirwheel(degrees, millis());
 }
 
@@ -736,6 +887,7 @@ void loop() {
     mapper.set_report_interval_ms(SkywriterHIDMapper::REPORT_INTERVAL_MS);
     MouseBLE.release(MOUSE_ALL);
     KeyboardBLE.releaseAll();
+    ble_disconnects++;
     Serial.println("SKYSTATE ble_dropped");
     Serial.println("SKYSTATE ble_advertising");
   }
@@ -756,6 +908,7 @@ void loop() {
     // into the link loss is wiped host-side by the zero consumer report.
     KeyboardBLE.consumerRelease();
     MouseBLE.move(0, 0, 0);
+    ble_connects++;
     Serial.println("SKYSTATE ble_resync battery=100 neutral_report");
     Serial.println("SKYSTATE ble_connected");
   }
@@ -776,4 +929,15 @@ void loop() {
   // driven by the millis() clock.
   mapper.tick(now);
   pulses_tick(now);
+
+  // Health status line, once every HEALTH_INTERVAL_MS (fix item P3.22):
+  // the counters the hardware gate P4.0a reads off the serial console —
+  // short reads and transfer-line-low polls as shares of all polls (no
+  // arithmetic needed), frames by message type, dispatched/dropped sensor
+  // events, HID reports by kind, link connects/disconnects, uptime (a
+  // board reset shows as uptime dropping back to zero).
+  if (now - health_last_ms >= HEALTH_INTERVAL_MS) {
+    health_last_ms = now;
+    print_health_status(now);
+  }
 }
