@@ -776,6 +776,65 @@ docker run -it --rm \
        round's other next steps (west-zone rerun, boot-intermittency
        probe, post-enclosure recheck, the F24 cross-check when a Pi is
        available) stay hardware-side, in P4.0's list.
+     Update (2026-11-28, hardware round 7 — run by a person on the host;
+     the round's record was `HW_REPORT.md`, findings F25–F28). The
+     P3.31 experiment ladder's first two rungs were flashed and tested,
+     each from a fresh power cycle with forget + re-pair after the
+     reflash (the standing caveat), and BOTH FAILED their criteria:
+     - Rung 1 (`cal=disable_all` — the sensor's five automatic
+       self-tuning features genuinely OFF, confirmed on the boot line
+       AND every health line, F25): the fresh boot's FIRST data frame
+       still reported `sysinfo=0xA0 clip=1` (F26), and the slow palm
+       descent produced 41 frames decoding as touch/gesture only
+       (button=60 wheel=12 key=12 media=4 reached the laptop — the
+       touch-channel spillover pattern of F22) with `pos=0` and `hid
+       pointer=0`, the LAST hover frame still carrying clip=1 (F27).
+       PositionValid (bit 0) has still never been set in any frame on
+       any build.
+     - Rung 2 (`cal=disable_idle`): the same first-frame verdict —
+       the boot's only frame already `sysinfo=0xA0 clip=1` — and this
+       build produced ZERO frames during its palm hover (uptime 2–14 s,
+       `ts_low` and every event counter frozen at the boot values,
+       F28). One trial per rung, and the legacy build also produces
+       zero frames for a still palm at close hover (F20), so the
+       41-vs-0 contrast is a single observation — the FAIL criterion
+       is the boot frame either way.
+     - **Verdict: auto-calibration — any single masked feature or the
+       whole suite — is ELIMINATED as the cause of the boot-time
+       receiver saturation** (the Clipping health bit is present
+       before any calibration feature could run, and turning the
+       whole suite off does not clear it). The instrument itself held
+       up: exactly one `ble_resync` + `ble_connected` pair per link
+       (`conn=1 disc=0` — P3.27's once-per-link behaviour verified
+       again) and `sensor_ok attempts=1 took_ms=29` (the boot gate
+       healthy).
+     - Per the ledger's ladder the next rung is the vendor-canonical
+       0x3F payload (Argument0 = 0x3F, mask = 0x3F — SIX bits, also
+       disabling calibration triggered by AFA, the adaptive filter;
+       the vendor's own Appendix A "Disable" fixed command), which did
+       NOT exist as a buildable variant — landed by the loop
+       iteration below as P3.32. The report's capture note for the
+       next round: attach the monitor BEFORE the palm descent so the
+       per-event SKYTRACE lines and live health lines record whether
+       ANY frame during the descent shows clip=0. The report's other
+       next steps (the boot-intermittency power-cycle probe — two more
+       boots this round, both clip=1 from the first frame — and the
+       west-zone fingertip rerun) stay hardware-side, in P4.0's list.
+     Update (2026-11-28, loop iteration after HW_REPORT.md round 7 —
+     code commit `7196712`): the report is consumed and the file
+     removed (PROMPT.md protocol — its measured facts live in the
+     entries above); its one code-side ask — the vendor-canonical 0x3F
+     rung as a flashable build — is P3.32, done in the same change (see
+     its Done entry for the details and the red→green test evidence).
+     No NEW failure came out of the round beyond the two rungs' FAILs
+     already recorded above: auto-calibration is dead as the Clipping
+     explanation, and the ladder's remaining rung awaits its flash.
+     `bash run_tests.sh` green 4/4, 160 pytest tests; all four Pico W
+     builds compile (the default plus three experiment variants, 22 %
+     flash / 34 % RAM, unchanged). The remaining open items are all
+     hardware-side (P4.0 and its probes), so this iteration writes the
+     `READY_FOR_HW` marker with the 0x3F experiment as the next round's
+     first test.
 - **Script invocation**: run the scripts as `bash ralph.sh` /
   `bash run_tests.sh` — their executable bit could not be set in this
   environment (`chmod` is blocked); run `chmod +x ralph.sh run_tests.sh`
@@ -909,6 +968,13 @@ session 6's clipping evidence; see P4.0's session-6 update and the
 round's `HW_REPORT.md` F19–F24)
 
 - [x] P3.31 → done, moved to the Done section below.
+
+### 3j — Post-experiment items (opened 2026-11-28 from hardware round
+7's two FAILs; see the status snapshot's round-7 update and the
+round's `HW_REPORT.md` F25–F28)
+
+- [x] P3.32 → done, moved to the Done section below (the
+      vendor-canonical 0x3F rung as a flashable build).
 
 ## Phase 4 — Outer hardware loop (host-side; container cannot verify)
 
@@ -1066,6 +1132,36 @@ item names what needs the Pico W plugged in.
       hardware steps in `HW_REPORT.md`'s list: P3.31 experiment
       build, west rerun, boot-intermittency probe, post-enclosure
       recheck, the F24 cross-check when a Pi is available.
+      Acceptance round update (2026-11-28, hardware round 7 — findings
+      F25–F28, the round's `HW_REPORT.md` held the captures): the
+      P3.31 experiment RAN and both its rungs FAILED — hypothesis (h)'s
+      auto-calibration branch is ELIMINATED. With the genuine disable
+      running (`cal=disable_all` confirmed on the boot line) the fresh
+      boot's FIRST data frame still carried `clip=1`, the palm
+      descent's 41 frames (touch/gesture only, `pos=0`) carried it
+      too, and the idle-only rung repeated the first-frame verdict
+      (its hover produced zero frames). The Clipping bit exists before
+      any calibration feature could run, so the saturation cause is
+      upstream of the whole suite. The hypothesis (h) list is now
+      exactly two items: a runtime-configuration interaction OUTSIDE
+      the calibration command (nothing else in the four-command
+      bring-up touches the analog operating point — the remaining
+      untested vendor lever is the 0x3F payload's AFA bit, outside
+      both rungs' masks, landed as P3.32 and awaiting its flash) or a
+      damaged board (the F24 Raspberry Pi cross-check, still blocked —
+      no Pi to hand; the 2026-11-24 boot's ~4 minutes of working
+      position remains the only counter-evidence, keeping
+      boot-dependent intermittency alive: the round added two more
+      fresh boots, both clip=1 from the first frame). Next hardware
+      steps, in order: flash and judge the P3.32 0x3F rung (monitor
+      attached BEFORE the palm descent this time, so the per-frame
+      SKYTRACE and live health lines show whether ANY descent frame
+      reads clip=0), then the cheap no-reflash probes (two or three
+      more fresh boots watching the first health lines for ANY boot
+      showing the healthy `sysinfo=0x80`, and the west-zone
+      small-fingertip rerun); still clip=1 after 0x3F → the code-side
+      ladder is EXHAUSTED and the damaged-board hypothesis stands with
+      the Pi cross-check as the only discriminator left.
       Reported symptoms (session 1, Linux/BlueZ laptop): the cursor jumps or
       teleports; it moves the wrong way or along the wrong axis; keyboard and
       media keys fire. Clicks and scrolling were not listed as symptoms. The
@@ -1404,6 +1500,65 @@ of them is a checkbox the loop can pick up:
 
 ## Done
 
+- P3.32 — the experiment ladder's third rung exists as a flashable
+  build: the vendor's own canonical disable (code commit `7196712`;
+  this ledger commit follows). In plain language: hardware round 7
+  (2026-11-28, findings F25–F28 — the round's `HW_REPORT.md`, consumed
+  into the status snapshot above and removed by this commit) flashed
+  and judged BOTH of P3.31's rungs and both FAILED: with all five
+  automatic self-tuning features genuinely off (`cal=disable_all`
+  confirmed on the boot line) the fresh boot's FIRST data frame still
+  carried the sensor's Clipping health bit, the palm descent's 41
+  frames carried it too, and the idle-only rung repeated the
+  first-frame verdict — auto-calibration is ELIMINATED as the cause of
+  the boot-time receiver saturation. What the report asked the loop
+  for was the one combination it could not yet flash: the vendor's own
+  Appendix A "Disable" fixed command (Argument0 = 0x3F, mask = 0x3F —
+  SIX bits: the five masked features plus bit 5, calibration
+  triggered by AFA (the adaptive filter), which sits outside both
+  first rungs' 0x1F masks). What landed:
+  - **`SKYWRITER_CAL_DISABLE_AFA=1`** — the third compile-time rung,
+    OFF by default like the others (the default build keeps the
+    legacy payload byte-for-byte); `flash.sh` forwards the knob
+    (yielding to the earlier rungs if more than one is set — one
+    variable at a time), and the serial console names the build
+    `cal=disable_afa` on BOTH the `sensor_ok` boot line and the
+    repeating health line, so a capture cannot mistake it for the
+    default even with a late-attached monitor.
+  - **The verdict record** — the sketch's command-4 comment now tells
+    the whole story in place: why the experiment was opened (round 6's
+    clipping evidence), what round 7 measured (both rungs FAILED, the
+    boot frame deciding each), and what a third FAIL means (the
+    code-side ladder exhausted; the damaged-board hypothesis and the
+    blocked Raspberry Pi cross-check remain). `specs/ble_hid.md` §6
+    gained the P3.32 implementation note with the same facts, and the
+    AGENTS.md build-flag gotcha now names the new switch.
+  - **run_tests.sh compiles the third variant in every run** (its
+    `#elif` branch would otherwise never be compiled anywhere) — all
+    three experiment builds plus the default compile green at 22 %
+    flash / 34 % RAM (unchanged).
+  - Test-first discipline held: the branch parser now reads the FOUR
+    variant branches, and the new/extended pins — the 0x3F/0x3F
+    payload with the six-bit claim, the `disable_afa` name, the
+    `#ifndef` off-by-default gates with the knob-precedence chain in
+    both the sketch and flash.sh, and the comment's round-7 verdict
+    tokens (F25 / ELIMINATED / 0x3F / Appendix A) — all verified
+    FAILING against the pre-change code first. 160 pytest tests;
+    `bash run_tests.sh` green 4/4 with the third experiment compile
+    folded into the firmware-compile check.
+  - On hardware (the next round, in the report's own order): flash
+    `SKYWRITER_EVENT_TRACE=1 SKYWRITER_CAL_DISABLE_AFA=1
+    ./pico-arduino/flash.sh pico-arduino/SkywriterController`, fresh
+    power cycle, forget + re-pair on the laptop (the standing
+    reflash caveat), confirm `cal=disable_afa` on the boot line, and
+    attach the monitor BEFORE the palm descent this time so the
+    per-event SKYTRACE lines and live health lines record whether ANY
+    descent frame reads clip=0. PASS = a live frame shows `clip=0` and
+    position events appear (`events pos` + `hid pointer` climbing);
+    FAIL = `clip=1` persists from the first boot frame → the
+    code-side ladder is EXHAUSTED, the damaged-board hypothesis
+    stands, and the F24 Raspberry Pi cross-check is the only
+    discriminator left.
 - P3.31 — the auto-calibration label told the truth at last, and the
   genuine disable became a build you can flash (code commit `baecc63`;
   this ledger commit follows). In plain language: every build this
